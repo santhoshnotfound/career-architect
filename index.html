@@ -1,0 +1,2206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Career Architect — Knowledge Graph Roadmap</title>
+
+  <!-- Inter for UI, JetBrains Mono for code/skill tags -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- D3 v7 — force simulation, drag, zoom, tooltip -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+
+  <style>
+    /* ── Reset ────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      /* Color palette — high contrast for projector legibility */
+      --bg:      #f7f7f5;
+      --surface: #ffffff;
+      --border:  #e4e3de;
+      --text:    #18181b;
+      --muted:   #71717a;
+
+      /* Semantic status colors */
+      --known:   #16a34a;   /* green  = user has this skill */
+      --missing: #dc2626;   /* red    = skill gap */
+      --next:    #d97706;   /* amber  = recommended next */
+      --neutral: #a1a1aa;   /* grey   = not required for role */
+
+      /* Domain accent colors for rings + badges */
+      --prog: #3b82f6;
+      --math: #7c3aed;
+      --ml:   #db2777;
+      --eng:  #0d9488;
+
+      --font:      'Inter', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --radius:    10px;
+      --shadow:    0 1px 2px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04);
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── App grid: sidebar | topbar + content ──────────────── */
+    .shell {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      grid-template-rows: auto 1fr;
+      min-height: 100vh;
+    }
+
+    /* ─────────────────────────────────────────────────────────
+       SIDEBAR
+    ───────────────────────────────────────────────────────── */
+    .sidebar {
+      grid-row: 1 / 3;
+      background: var(--text);
+      color: #fff;
+      padding: 28px 18px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .sidebar-eyebrow {
+      font-size: 10px; font-weight: 600;
+      letter-spacing: 0.14em; text-transform: uppercase;
+      color: rgba(255,255,255,0.35); margin-bottom: 4px;
+    }
+    .sidebar-brand {
+      font-size: 20px; font-weight: 800; line-height: 1.2;
+      margin-bottom: 26px;
+    }
+
+    .nav-btn {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%; padding: 9px 12px;
+      border: none; border-radius: 7px;
+      background: none;
+      color: rgba(255,255,255,0.42);
+      font-family: var(--font); font-size: 13px; font-weight: 600;
+      cursor: pointer; text-align: left;
+      transition: background 0.15s, color 0.15s;
+    }
+    .nav-btn:hover  { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.8); }
+    .nav-btn.active { background: rgba(255,255,255,0.11); color: #fff; }
+    .nav-badge {
+      width: 20px; height: 20px; border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,0.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700; flex-shrink: 0;
+    }
+    .nav-btn.active .nav-badge { border-color: rgba(255,255,255,0.55); }
+
+    .sidebar-spacer { flex: 1; }
+    .sidebar-footer { font-size: 11px; color: rgba(255,255,255,0.25); line-height: 1.75; }
+    .sidebar-footer b { color: rgba(255,255,255,0.38); }
+
+    /* ─────────────────────────────────────────────────────────
+       TOP BAR
+    ───────────────────────────────────────────────────────── */
+    .topbar {
+      padding: 18px 32px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .topbar-step  { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+    .topbar-title { font-size: 16px; font-weight: 700; }
+
+    .api-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 12px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 20px;
+      font-size: 11px; font-family: var(--font-mono); color: var(--muted);
+    }
+    .api-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--neutral); }
+    .api-dot.ok  { background: var(--known); }
+    .api-dot.err { background: var(--missing); }
+
+    /* ─────────────────────────────────────────────────────────
+       MAIN CONTENT
+    ───────────────────────────────────────────────────────── */
+    .content { padding: 28px 32px; overflow-y: auto; }
+
+    /* ─────────────────────────────────────────────────────────
+       CARDS
+    ───────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+    }
+    .card-label {
+      font-size: 10px; font-weight: 700;
+      letter-spacing: 0.11em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 14px;
+    }
+
+    /* ─────────────────────────────────────────────────────────
+       LAYOUT HELPERS
+    ───────────────────────────────────────────────────────── */
+    .stack   { display: flex; flex-direction: column; }
+    .gap-4   { gap: 16px; }
+    .gap-6   { gap: 24px; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .row-between { display: flex; align-items: center; justify-content: space-between; }
+    .row         { display: flex; align-items: center; }
+    .text-sm   { font-size: 12.5px; }
+    .text-muted { color: var(--muted); }
+    .mt-2 { margin-top: 8px; }
+    .mt-3 { margin-top: 12px; }
+    .mt-4 { margin-top: 16px; }
+    .hidden { display: none !important; }
+
+    /* ─────────────────────────────────────────────────────────
+       INPUTS
+    ───────────────────────────────────────────────────────── */
+    textarea {
+      width: 100%; min-height: 155px;
+      font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7;
+      padding: 14px; resize: vertical;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--bg); color: var(--text);
+      outline: none; transition: border-color 0.15s;
+    }
+    textarea:focus { border-color: #71717a; }
+    textarea::placeholder { color: #a1a1aa; }
+
+    select {
+      width: 100%;
+      font-family: var(--font); font-size: 13.5px; font-weight: 500;
+      padding: 10px 14px;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--bg); color: var(--text);
+      outline: none; cursor: pointer; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7' viewBox='0 0 12 7'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2371717a' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 13px center;
+    }
+
+    /* ─────────────────────────────────────────────────────────
+       BUTTONS
+    ───────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 9px 20px; border-radius: 7px;
+      font-family: var(--font); font-size: 13px; font-weight: 600;
+      cursor: pointer; border: none; transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .btn-primary { background: var(--text); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #27272a; transform: translateY(-1px); }
+    .btn-primary:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; transform: none; }
+    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { border-color: var(--text); color: var(--text); }
+
+    /* ─────────────────────────────────────────────────────────
+       SKILL TAGS
+    ───────────────────────────────────────────────────────── */
+    .tags { display: flex; flex-wrap: wrap; gap: 7px; }
+    .tag {
+      display: inline-flex; align-items: center;
+      padding: 4px 11px; border-radius: 20px;
+      font-size: 11.5px; font-weight: 600; font-family: var(--font-mono);
+      border: 1.5px solid transparent;
+      transition: all 0.12s; user-select: none;
+    }
+    /* Clickable states */
+    .tag-on  { background: var(--text); color: #fff; border-color: var(--text); cursor: pointer; }
+    .tag-off { background: var(--bg); color: var(--muted); border-color: var(--border); cursor: pointer; }
+    /* Read-only status display */
+    .tag-known   { background: #dcfce7; color: #15803d; }
+    .tag-missing { background: #fee2e2; color: #991b1b; }
+
+    /* ─────────────────────────────────────────────────────────
+       READINESS BAR
+    ───────────────────────────────────────────────────────── */
+    .bar-track { height: 8px; background: var(--bg); border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+    .bar-fill  { height: 100%; background: var(--known); border-radius: 8px; transition: width 0.6s ease; }
+
+    /* ─────────────────────────────────────────────────────────
+       ROADMAP STEPS
+    ───────────────────────────────────────────────────────── */
+    .steps { display: flex; flex-direction: column; }
+    .step {
+      display: flex; gap: 14px;
+      padding: 14px 0; border-bottom: 1px solid var(--border);
+    }
+    .step:last-child { border-bottom: none; }
+    .step-num {
+      width: 26px; height: 26px;
+      background: var(--text); color: #fff;
+      border-radius: 50%; font-size: 11px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; margin-top: 1px;
+    }
+    .step-domain {
+      display: inline-block;
+      font-size: 9.5px; font-weight: 700;
+      letter-spacing: 0.09em; text-transform: uppercase;
+      padding: 2px 7px; border-radius: 4px; margin-bottom: 5px;
+    }
+    .step-name { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
+    .step-why  { font-size: 12px; color: var(--muted); line-height: 1.55; }
+
+    /* ─────────────────────────────────────────────────────────
+       D3 GRAPH — wrapper, canvas, controls, tooltip
+    ───────────────────────────────────────────────────────── */
+
+    /* Outer wrapper: position:relative is the anchor for all
+       absolute children (tooltip, controls, hint pill).        */
+    #graph-wrap {
+      position: relative;
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    /* Inner canvas: D3 appends <svg> here */
+    #graph-canvas {
+      width: 100%; height: 500px;
+      cursor: grab;
+    }
+    #graph-canvas:active { cursor: grabbing; }
+    #graph-canvas svg { width: 100%; height: 100%; display: block; }
+
+    /* ── D3 node elements ── */
+    .d3-node { cursor: pointer; }
+    .d3-node circle {
+      transition: filter 0.12s;
+    }
+    .d3-node circle:hover { filter: brightness(1.18); }
+    .d3-node.selected circle.main-circle { stroke: var(--text) !important; stroke-width: 2.5px !important; }
+    .d3-node.dragging circle { cursor: grabbing; filter: brightness(0.88); }
+    .d3-node text { pointer-events: none; user-select: none; }
+
+    /* ── D3 edges ── */
+    .d3-edge {
+      stroke: #d1d5db;
+      stroke-opacity: 0.75;
+      stroke-width: 1.3px;
+    }
+    .d3-edge.lit {
+      stroke: #64748b !important;
+      stroke-opacity: 1 !important;
+      stroke-width: 2.2px !important;
+    }
+
+    /* ── Zoom buttons ── */
+    .graph-controls {
+      position: absolute;
+      bottom: 12px; right: 12px;
+      display: flex; flex-direction: column; gap: 4px;
+      z-index: 10;
+    }
+    .graph-ctrl-btn {
+      width: 28px; height: 28px;
+      background: rgba(255,255,255,0.92);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 15px; font-weight: 700; line-height: 1;
+      cursor: pointer; color: var(--text);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+      transition: background 0.12s, box-shadow 0.12s;
+      backdrop-filter: blur(4px);
+    }
+    .graph-ctrl-btn:hover { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.10); }
+
+    /* ── Usage hint pill ── */
+    .graph-hint {
+      position: absolute;
+      bottom: 12px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.55);
+      color: #fff; font-size: 10.5px; font-weight: 500;
+      padding: 4px 12px; border-radius: 20px;
+      pointer-events: none;
+      transition: opacity 0.5s;
+      z-index: 9;
+    }
+    .graph-hint.fade { opacity: 0; }
+
+    /* ── Node detail panel ── */
+    .graph-tooltip {
+      position: absolute;
+      top: 12px; left: 12px;
+      width: 240px;
+      background: rgba(255,255,255,0.97);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 15px 12px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.09);
+      z-index: 30;
+      backdrop-filter: blur(6px);
+      animation: fadeUp 0.15s ease both;
+    }
+    .graph-tooltip.hidden { display: none; }
+
+    .tt-close {
+      position: absolute; top: 9px; right: 9px;
+      background: none; border: none;
+      font-size: 12px; color: var(--muted);
+      cursor: pointer; padding: 3px 6px;
+      border-radius: 4px; line-height: 1;
+    }
+    .tt-close:hover { background: var(--bg); color: var(--text); }
+
+    .tt-domain-badge {
+      display: inline-flex; align-items: center;
+      font-size: 9px; font-weight: 800;
+      letter-spacing: 0.09em; text-transform: uppercase;
+      padding: 2px 8px; border-radius: 4px;
+      margin-bottom: 8px;
+    }
+
+    .tt-name {
+      font-size: 13.5px; font-weight: 800;
+      color: var(--text); line-height: 1.25;
+      margin-bottom: 6px; padding-right: 18px;
+    }
+
+    .tt-status {
+      display: inline-block;
+      font-size: 10.5px; font-weight: 600;
+      padding: 2px 9px; border-radius: 20px;
+      margin-bottom: 9px;
+    }
+
+    .tt-desc {
+      font-size: 11px; color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .tt-section {
+      margin-top: 10px; padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+    .tt-section.hidden { display: none; }
+
+    .tt-section-label {
+      font-size: 9.5px; font-weight: 800;
+      text-transform: uppercase; letter-spacing: 0.09em;
+      color: var(--muted); margin-bottom: 6px;
+    }
+
+    .tt-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+
+    .tt-tag {
+      display: inline-block;
+      font-size: 9.5px; font-weight: 600;
+      font-family: var(--font-mono);
+      padding: 2px 7px; border-radius: 10px;
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    /* ─────────────────────────────────────────────────────────
+       LEGEND
+    ───────────────────────────────────────────────────────── */
+    .legend { display: flex; flex-wrap: wrap; gap: 16px; }
+    .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); font-weight: 500; }
+    .legend-dot  { width: 8px; height: 8px; border-radius: 50%; }
+
+    /* ─────────────────────────────────────────────────────────
+       STAT NUMBERS (graph overview card)
+    ───────────────────────────────────────────────────────── */
+    .stats-row { display: flex; gap: 24px; margin-bottom: 12px; }
+    .stat-num  { font-size: 28px; font-weight: 800; line-height: 1; }
+    .stat-lbl  { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+
+    /* ─────────────────────────────────────────────────────────
+       ANIMATIONS
+    ───────────────────────────────────────────────────────── */
+    .page { animation: fadeUp 0.2s ease both; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 15px; height: 15px;
+      border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.65s linear infinite;
+      display: inline-block;
+    }
+
+    /* ─────────────────────────────────────────────────────────
+       TOAST
+    ───────────────────────────────────────────────────────── */
+    .toast {
+      position: fixed; bottom: 20px; right: 20px;
+      background: var(--text); color: #fff;
+      padding: 10px 18px; border-radius: 7px;
+      font-size: 12.5px; font-weight: 500;
+      z-index: 9999; pointer-events: none;
+      opacity: 0; transform: translateY(8px);
+      transition: all 0.22s;
+    }
+    .toast.show  { opacity: 1; transform: translateY(0); }
+    .toast.error { background: #dc2626; }
+
+    /* ─────────────────────────────────────────────────────────
+       READINESS GAUGE (circular SVG)
+    ───────────────────────────────────────────────────────── */
+    .gauge-svg { display: block; }
+    .gauge-bg   { fill: none; }
+    .gauge-track { fill: none; stroke: var(--border); }
+    .gauge-fill  { fill: none; stroke-linecap: round; transition: stroke-dashoffset 0.8s cubic-bezier(.4,0,.2,1); }
+    .gauge-center-text { font-family: var(--font); font-weight: 800; }
+    .gauge-sub-text    { font-family: var(--font); }
+
+    /* ─────────────────────────────────────────────────────────
+       SCORE BREAKDOWN BARS
+    ───────────────────────────────────────────────────────── */
+    .score-item { margin-bottom: 14px; }
+    .score-item:last-child { margin-bottom: 0; }
+    .score-item-label { font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 5px; display: flex; justify-content: space-between; }
+    .score-item-bar-track { height: 6px; background: var(--bg); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+    .score-item-bar-fill  { height: 100%; border-radius: 6px; transition: width 0.7s ease; }
+    .score-difficulty {
+      display: inline-block;
+      font-size: 11px; font-weight: 700;
+      padding: 3px 10px; border-radius: 20px;
+      margin-top: 10px;
+    }
+    .diff-low    { background: #dcfce7; color: #15803d; }
+    .diff-medium { background: #fef9c3; color: #854d0e; }
+    .diff-high   { background: #fee2e2; color: #991b1b; }
+
+    /* ─────────────────────────────────────────────────────────
+       STUDY PLAN TABLE
+    ───────────────────────────────────────────────────────── */
+    .plan-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .plan-table th {
+      background: var(--text); color: #fff;
+      font-size: 10px; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      padding: 8px 12px; text-align: left;
+    }
+    .plan-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .plan-table tr:nth-child(even) td { background: var(--bg); }
+    .plan-table tr:last-child td { border-bottom: none; }
+    .plan-week    { font-weight: 700; color: var(--muted); white-space: nowrap; }
+    .plan-skill   { font-weight: 600; }
+    .plan-diff    { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+    .plan-tip     { color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+    /* ─────────────────────────────────────────────────────────
+       LOADING STATE
+    ───────────────────────────────────────────────────────── */
+    .analytics-loading {
+      display: flex; align-items: center; gap: 10px;
+      padding: 16px; color: var(--muted); font-size: 13px;
+    }
+    .spinner-dark {
+      width: 15px; height: 15px;
+      border: 2px solid var(--border); border-top-color: var(--text);
+      border-radius: 50%; animation: spin 0.65s linear infinite;
+      display: inline-block; flex-shrink: 0;
+    }
+
+    /* ─────────────────────────────────────────────────────────
+       GITHUB SCANNER — INPUT TABS
+    ───────────────────────────────────────────────────────── */
+    .input-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+    }
+    .input-tab {
+      flex: 1;
+      padding: 14px 20px;
+      background: none;
+      border: none;
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.15s;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .input-tab:hover  { color: var(--text); background: var(--bg); }
+    .input-tab.active { color: var(--text); border-bottom-color: var(--text); }
+
+    /* ─────────────────────────────────────────────────────────
+       GITHUB SCANNER — WHAT GETS SCANNED ROW
+    ───────────────────────────────────────────────────────── */
+    .github-info-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .github-info-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11.5px;
+      color: var(--muted);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+    }
+    .github-info-icon { font-size: 13px; }
+
+    /* ─────────────────────────────────────────────────────────
+       GITHUB SCANNER — SIGNAL LIST (shows what triggered skills)
+    ───────────────────────────────────────────────────────── */
+    .signals-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .signal-item {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 8px;
+      align-items: start;
+      font-size: 12px;
+      padding: 7px 10px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .signal-skill  { font-weight: 700; color: var(--text); }
+    .signal-detail { color: var(--muted); font-size: 11px; font-family: var(--font-mono); }
+
+    /* ─────────────────────────────────────────────────────────
+       GITHUB SUCCESS BANNER
+    ───────────────────────────────────────────────────────── */
+    .github-success-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #15803d;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    /* ─────────────────────────────────────────────────────────
+       INFO BLOCKS
+    ───────────────────────────────────────────────────────── */
+    .info-block { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+    .info-block b { color: var(--text); font-weight: 600; }
+  </style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ════════════════════════════════
+       SIDEBAR
+  ════════════════════════════════ -->
+  <nav class="sidebar">
+    <div class="sidebar-eyebrow">Research Prototype</div>
+    <div class="sidebar-brand">Career<br/>Architect</div>
+
+    <button class="nav-btn active" id="nav-extract" onclick="showPage('extract')">
+      <span class="nav-badge">1</span> Resume Analysis
+    </button>
+    <button class="nav-btn" id="nav-skills" onclick="showPage('skills')">
+      <span class="nav-badge">2</span> Skill Review
+    </button>
+    <button class="nav-btn" id="nav-roadmap" onclick="showPage('roadmap')">
+      <span class="nav-badge">3</span> Roadmap + Graph
+    </button>
+
+    <div class="sidebar-spacer"></div>
+    <div class="sidebar-footer">
+      <b>Engine</b><br/>
+      NetworkX · FastAPI<br/>
+      Python 3.11 · SQLite
+    </div>
+  </nav>
+
+  <!-- ════════════════════════════════
+       TOP BAR
+  ════════════════════════════════ -->
+  <header class="topbar">
+    <div>
+      <div class="topbar-step" id="topbar-step">Step 1 of 3</div>
+      <div class="topbar-title" id="topbar-title">Paste your resume or project description</div>
+    </div>
+    <div class="api-pill">
+      <div class="api-dot" id="api-dot"></div>
+      <span id="api-label">connecting…</span>
+    </div>
+  </header>
+
+  <!-- ════════════════════════════════
+       MAIN
+  ════════════════════════════════ -->
+  <main class="content">
+
+    <!-- ──────────────────────────────
+         PAGE 1: Resume input + GitHub scanner
+    ────────────────────────────── -->
+    <div id="page-extract" class="page stack gap-6">
+
+      <!-- Input method tabs -->
+      <div class="card" style="padding:0;overflow:hidden">
+
+        <!-- Tab switcher -->
+        <div class="input-tabs">
+          <button class="input-tab active" id="tab-resume" onclick="switchInputTab('resume')">
+            📄 Paste Resume
+          </button>
+          <button class="input-tab" id="tab-github" onclick="switchInputTab('github')">
+            🐙 Scan GitHub
+          </button>
+        </div>
+
+        <!-- Resume input panel -->
+        <div id="panel-resume" style="padding:24px">
+          <div class="card-label">Resume or Project Description</div>
+          <textarea id="resume-input" placeholder="Paste your resume, GitHub README, or any project description here.
+
+Example:
+I built image classifiers using PyTorch and Python. I studied linear algebra
+and probability at university. I use Git daily, SQL databases, and I've been
+reading NLP papers and learning about transformer architectures independently."></textarea>
+          <div class="row-between mt-3">
+            <span class="text-sm text-muted" id="char-count">0 characters</span>
+            <div class="row" style="gap:8px">
+              <button class="btn btn-ghost" onclick="loadExample()">Load example</button>
+              <button class="btn btn-primary" id="extract-btn" onclick="runExtraction()">
+                Analyze with AI
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- GitHub scanner panel -->
+        <div id="panel-github" style="padding:24px" class="hidden">
+          <div class="card-label">GitHub Profile URL or Username</div>
+          <div class="row mt-2" style="gap:10px">
+            <input
+              id="github-input"
+              type="text"
+              placeholder="e.g. github.com/yourusername  or just  yourusername"
+              style="flex:1;padding:11px 14px;border:1px solid var(--border);
+                     border-radius:8px;font-family:var(--font-mono);font-size:13px;
+                     background:var(--bg);color:var(--text);outline:none"
+              onkeydown="if(event.key==='Enter') runGithubScan()"
+            />
+            <button class="btn btn-primary" id="github-btn" onclick="runGithubScan()">
+              Scan Repos
+            </button>
+          </div>
+
+          <!-- What gets scanned info -->
+          <div class="github-info-row mt-3">
+            <div class="github-info-item">
+              <span class="github-info-icon">📦</span>
+              <span>requirements.txt</span>
+            </div>
+            <div class="github-info-item">
+              <span class="github-info-icon">📦</span>
+              <span>package.json</span>
+            </div>
+            <div class="github-info-item">
+              <span class="github-info-icon">🏷️</span>
+              <span>Topic tags</span>
+            </div>
+            <div class="github-info-item">
+              <span class="github-info-icon">💻</span>
+              <span>Languages</span>
+            </div>
+            <div class="github-info-item">
+              <span class="github-info-icon">🐳</span>
+              <span>Dockerfiles</span>
+            </div>
+            <div class="github-info-item">
+              <span class="github-info-icon">📓</span>
+              <span>Notebooks</span>
+            </div>
+          </div>
+
+          <!-- Scan result signals (shown after scan) -->
+          <div id="github-signals" class="hidden mt-3">
+            <div class="card-label" style="margin-bottom:8px">What was found</div>
+            <div id="github-signals-list" class="signals-list"></div>
+          </div>
+        </div>
+
+      </div><!-- /card -->
+
+      <div class="two-col">
+
+        <div class="card stack gap-4">
+          <div class="card-label">How It Works</div>
+          <div class="info-block"><b>1. Skill Detection</b><br/>Paste your resume OR scan your GitHub profile. Both methods extract canonical skill names that match nodes in the knowledge graph.</div>
+          <div class="info-block"><b>2. Graph Gap Analysis</b><br/>Your skills are compared against curated requirements for your chosen role. Missing skills are identified via set difference.</div>
+          <div class="info-block"><b>3. Shortest-Path Roadmap</b><br/>NetworkX runs BFS on the prerequisite DAG to find the minimum learning path from what you know to each missing skill.</div>
+        </div>
+
+        <div class="card">
+          <div class="card-label">Knowledge Graph</div>
+          <div id="graph-stats" class="text-sm text-muted">Loading…</div>
+        </div>
+
+      </div>
+    </div><!-- /page-extract -->
+
+    <!-- ──────────────────────────────
+         PAGE 2: Skill review
+    ────────────────────────────── -->
+    <div id="page-skills" class="page stack gap-6 hidden">
+
+      <div class="card">
+        <div class="row-between" style="margin-bottom:14px">
+          <div class="card-label" style="margin-bottom:0">Detected Skills</div>
+          <span class="text-sm text-muted" id="skill-count-label">0 skills</span>
+        </div>
+        <div class="tags" id="skill-tags"></div>
+        <p class="text-sm text-muted mt-3">
+          Click tags to toggle. Deselect anything you don't actually know.
+          Dark tags = included in gap analysis.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Add a Skill Manually</div>
+        <div class="row mt-2" style="gap:10px">
+          <select id="manual-skill-select">
+            <option value="">— Select a skill to add —</option>
+          </select>
+          <button class="btn btn-ghost" onclick="addManualSkill()">Add</button>
+        </div>
+      </div>
+
+      <!-- Feedback card — appears after skills are detected -->
+      <div class="card" id="feedback-card" style="display:none">
+        <div class="card-label" style="margin-bottom:10px">Was the skill detection accurate?</div>
+        <div id="feedback-pre" class="row" style="gap:10px;align-items:center">
+          <button class="feedback-btn feedback-good" onclick="submitFeedback('good')">
+            👍 Yes, looks right
+          </button>
+          <button class="feedback-btn feedback-bad" onclick="submitFeedback('bad')">
+            👎 Some skills are wrong
+          </button>
+          <span class="text-sm text-muted">Helps improve the detector for everyone</span>
+        </div>
+        <!-- Shown after bad rating — invite correction detail -->
+        <div id="feedback-bad-detail" class="hidden mt-3">
+          <p class="text-sm text-muted" style="margin-bottom:8px">
+            Deselect the wrong skills above, then click below to send the correction:
+          </p>
+          <button class="btn btn-ghost" style="font-size:12px" onclick="submitCorrectedFeedback()">
+            Send correction →
+          </button>
+        </div>
+        <!-- Shown after submission -->
+        <div id="feedback-done" class="hidden">
+          <span style="color:var(--known);font-weight:600;font-size:13px">
+            ✓ Thanks! Feedback saved.
+          </span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Target Role</div>
+        <select id="role-select" style="margin-top:4px">
+          <option value="">— Choose your target role —</option>
+        </select>
+        <div class="row" style="justify-content:flex-end; margin-top:16px">
+          <button class="btn btn-primary" id="roadmap-btn" onclick="runRoadmap()">
+            Generate Roadmap →
+          </button>
+        </div>
+      </div>
+
+    </div><!-- /page-skills -->
+
+    <!-- ──────────────────────────────
+         PAGE 3: Graph + roadmap
+    ────────────────────────────── -->
+    <div id="page-roadmap" class="page stack gap-6 hidden">
+
+      <div class="card" style="padding:20px">
+        <div class="row-between" style="margin-bottom:14px">
+          <div class="card-label" style="margin-bottom:0">Prerequisite Knowledge Graph</div>
+          <span class="text-sm text-muted" id="graph-role-label"></span>
+        </div>
+        <!-- Graph wrapper: position:relative so tooltip/controls anchor correctly -->
+        <div id="graph-wrap">
+          <!-- D3 mounts <svg> into this div at runtime -->
+          <div id="graph-canvas"></div>
+
+          <!-- Detail panel — shown when a node is clicked -->
+          <div id="graph-tooltip" class="graph-tooltip hidden">
+            <button class="tt-close" onclick="hideTooltip()">✕</button>
+            <div id="tt-domain-badge" class="tt-domain-badge"></div>
+            <div id="tt-name" class="tt-name"></div>
+            <div id="tt-status" class="tt-status"></div>
+            <div id="tt-desc" class="tt-desc"></div>
+            <div id="tt-prereqs" class="tt-section hidden">
+              <div class="tt-section-label">Prerequisites</div>
+              <div id="tt-prereqs-list" class="tt-tags"></div>
+            </div>
+            <div id="tt-leads-to" class="tt-section hidden">
+              <div class="tt-section-label">Leads to</div>
+              <div id="tt-leads-list" class="tt-tags"></div>
+            </div>
+          </div>
+
+          <!-- Zoom controls -->
+          <div class="graph-controls">
+            <button class="graph-ctrl-btn" onclick="graphZoomIn()"  title="Zoom in">+</button>
+            <button class="graph-ctrl-btn" onclick="graphZoomOut()" title="Zoom out">−</button>
+            <button class="graph-ctrl-btn" onclick="graphReset()"   title="Reset view">⊙</button>
+          </div>
+
+          <!-- Hint shown once -->
+          <div class="graph-hint" id="graph-hint">drag · scroll to zoom · click node</div>
+        </div>
+        <div class="row-between mt-3">
+          <div class="legend">
+            <div class="legend-item"><div class="legend-dot" style="background:var(--known)"></div>You have this</div>
+            <div class="legend-item"><div class="legend-dot" style="background:var(--next)"></div>Learn next</div>
+            <div class="legend-item"><div class="legend-dot" style="background:var(--missing)"></div>Skill gap</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#e4e3de"></div>Not required</div>
+          </div>
+          <div class="legend">
+            <div class="legend-item"><div class="legend-dot" style="background:var(--prog);border-radius:2px;width:10px;height:10px"></div>Programming</div>
+            <div class="legend-item"><div class="legend-dot" style="background:var(--math);border-radius:2px;width:10px;height:10px"></div>Math</div>
+            <div class="legend-item"><div class="legend-dot" style="background:var(--ml);border-radius:2px;width:10px;height:10px"></div>ML / AI</div>
+            <div class="legend-item"><div class="legend-dot" style="background:var(--eng);border-radius:2px;width:10px;height:10px"></div>Engineering</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Analytics row: Readiness Gauge + Score Breakdown -->
+      <div class="two-col">
+
+        <!-- Readiness gauge (circular SVG progress) -->
+        <div class="card" style="display:flex;flex-direction:column;align-items:center;padding:28px 24px">
+          <div class="card-label" style="align-self:flex-start">Readiness Score</div>
+          <div id="readiness-gauge" style="margin:8px 0 16px"></div>
+          <div id="readiness-interpretation" class="text-sm text-muted" style="text-align:center;line-height:1.6;max-width:260px"></div>
+        </div>
+
+        <!-- Score component breakdown -->
+        <div class="card stack gap-4">
+          <div class="card-label">Score Breakdown</div>
+          <div id="score-breakdown"></div>
+        </div>
+
+      </div>
+
+      <!-- Learning path + classic summary row -->
+      <div class="two-col">
+        <div class="card">
+          <div class="card-label">Your Learning Path</div>
+          <div class="steps" id="roadmap-steps"></div>
+        </div>
+        <div class="card stack gap-4">
+          <div class="card-label">Skills Summary</div>
+          <div id="summary-panel"></div>
+        </div>
+      </div>
+
+      <!-- Study Plan table -->
+      <div class="card" id="study-plan-card">
+        <div class="row-between" style="margin-bottom:16px">
+          <div class="card-label" style="margin-bottom:0">Semester Study Plan</div>
+          <div class="row" style="gap:8px">
+            <select id="plan-months-select" onchange="refreshStudyPlan()">
+              <option value="2">2 months</option>
+              <option value="3" selected>3 months</option>
+              <option value="4">4 months</option>
+              <option value="6">6 months</option>
+            </select>
+            <select id="plan-hours-select" onchange="refreshStudyPlan()">
+              <option value="4">4 hrs/wk</option>
+              <option value="6" selected>6 hrs/wk</option>
+              <option value="8">8 hrs/wk</option>
+              <option value="12">12 hrs/wk</option>
+            </select>
+          </div>
+        </div>
+        <div id="study-plan-summary" class="text-sm text-muted" style="margin-bottom:14px"></div>
+        <div id="study-plan-table"></div>
+      </div>
+
+      <!-- Download report button -->
+      <div class="card" style="padding:20px">
+        <div class="row-between">
+          <div>
+            <div class="card-label" style="margin-bottom:4px">Academic Evaluation Report</div>
+            <div class="text-sm text-muted">
+              Downloads a university-style PDF with readiness score, skill inventory,
+              gap analysis, roadmap, and study plan — suitable for portfolio or advising.
+            </div>
+          </div>
+          <div class="row" style="gap:10px;flex-shrink:0;margin-left:24px">
+            <input
+              id="report-name-input"
+              type="text"
+              placeholder="Your name"
+              style="padding:8px 12px;border:1px solid var(--border);border-radius:7px;
+                     font-family:var(--font);font-size:13px;background:var(--bg);
+                     color:var(--text);outline:none;width:160px"
+            />
+            <button class="btn btn-primary" id="report-btn" onclick="downloadReport()">
+              ↓ Download PDF Report
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /page-roadmap -->
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// Career Architect — Frontend Application
+//
+// Design decisions:
+//   - Vanilla JS only: no build step, easy to present
+//   - All mutable state lives in one `state` object
+//   - API calls use fetch() — all endpoints return JSON
+//   - SVG graph is rendered manually (no D3 / React Flow)
+//     to keep the dependency count at zero
+//
+// Data flow (what talks to what):
+//
+//   [Page 1] textarea
+//       → POST /extract-skills/
+//       ← { skills: [...], available_skills_in_graph: [...] }
+//
+//   [Page 2] selected skills + role dropdown
+//       → POST /roadmap/         (graph algorithm)
+//       → POST /graph-data/      (node positions + status colors)
+//       ← roadmapResult, graphData
+//
+//   [Page 3] renders all panels, then fires analytics in parallel:
+//       → POST /readiness/       (score engine)
+//       → POST /study-plan/      (semester planner)
+//       ← readinessResult, studyPlanResult
+//
+//   [Download button] builds URL for:
+//       → GET /report/?user_skills=...&target_role=...
+//       ← binary PDF download
+// ============================================================
+
+const API = 'http://127.0.0.1:8000';
+
+// ── Single source of truth ────────────────────────────────────
+const state = {
+  extractedSkills:  [],   // What the AI found in the resume text
+  selectedSkills:   [],   // What the user confirmed (after toggling)
+  availableSkills:  [],   // Every skill that exists in the graph
+  availableRoles:   [],   // Role names from TARGET_ROLES in backend
+  targetRole:       '',
+  roadmapResult:    null, // POST /roadmap response
+  graphData:        null, // POST /graph-data response
+  readinessResult:  null, // POST /readiness response
+  studyPlanResult:  null, // POST /study-plan response
+};
+
+// ── Skill descriptions (83 skills) ──────────────────────────
+// Shown in roadmap steps AND the D3 node tooltip panel.
+// SKILL_WHY = "why it matters" (roadmap steps)
+// SKILL_DESC = longer description (D3 click tooltip)
+const SKILL_WHY = {
+  // Programming
+  "Python":                    "The de-facto language for ML/AI research. Required by every lab in this space.",
+  "Data Structures":           "Enables efficient code. Interviewers test this directly. Prerequisite to algorithms.",
+  "Algorithms":                "Core to problem solving and technical interviews at top firms.",
+  "Object Oriented Programming": "Organizes large codebases. Required for professional software engineering.",
+  "Design Patterns":           "Reusable solutions to common software problems — makes code maintainable.",
+  "File I/O and APIs":         "Reading files, calling external APIs — fundamental Python programming.",
+  "Problem Solving":           "Algorithmic thinking applied to novel situations. Core research skill.",
+  "Testing and TDD":           "Writing tests before code reduces bugs and makes refactoring safe.",
+  "Type Systems":              "Static types catch bugs before runtime. Essential for large TypeScript/Python codebases.",
+  "Concurrency":               "Threads, async/await, and parallelism — required for performant backend systems.",
+  "Scripting":                 "Automation of repetitive tasks — saves hours and reduces human error.",
+  // Math
+  "Calculus":                  "Derivatives and gradients underpin backpropagation in neural networks.",
+  "Linear Algebra":            "The mathematical language of ML — tensors, matrix operations, and projections.",
+  "Probability":               "Foundation for Bayesian reasoning, uncertainty quantification, and statistical models.",
+  "Statistics":                "Essential for evaluating models, interpreting data, and publishing research.",
+  "Hypothesis Testing":        "Rigorous scientific method for evaluating experiments and validating claims.",
+  "Research Methods":          "How to read, evaluate, and write academic papers. Essential for lab work.",
+  "Data Science":              "Data wrangling, visualization, and analysis — the bridge between stats and ML.",
+  "Discrete Mathematics":      "Sets, graphs, combinatorics — the math of computer science algorithms.",
+  "Optimisation":              "Finding minima/maxima — the core operation behind every ML training loop.",
+  "Information Theory":        "Entropy, KL divergence — theoretical foundations of compression and NLP.",
+  "Data Compression":          "Lossless and lossy compression algorithms — relevant to efficient data pipelines.",
+  "Time Series Analysis":      "Forecasting, seasonality, and temporal patterns — essential for finance and IoT.",
+  "Feature Engineering":       "Turning raw data into meaningful signals — often more impactful than model choice.",
+  // ML / AI
+  "Machine Learning":          "The central field. All downstream specializations build on this foundation.",
+  "Deep Learning":             "Modern ML — transformers, CNNs, and LLMs are all deep learning architectures.",
+  "Computer Vision":           "Image and video understanding — medical imaging, robotics, autonomous systems.",
+  "NLP":                       "Powers LLMs, chatbots, and text analysis. One of the most active research areas.",
+  "Reinforcement Learning":    "Training agents through reward signals. Powers robotics, game AI, and RLHF.",
+  "PyTorch":                   "The dominant research framework. Most academic papers include PyTorch code.",
+  "Large Language Models":     "GPT, Gemini, Claude — the most transformative technology in AI today.",
+  "Prompt Engineering":        "Crafting effective prompts to get reliable, accurate outputs from LLMs.",
+  "RAG Systems":               "Retrieval-Augmented Generation — grounding LLMs in private or up-to-date data.",
+  "Vector Databases":          "Stores embeddings for semantic search — core infrastructure for RAG systems.",
+  "MLOps":                     "Automating the ML lifecycle — training, evaluation, deployment, monitoring.",
+  "Model Serving":             "Deploying trained models as APIs that handle real-time or batch inference.",
+  "ML System Design":          "Designing end-to-end ML systems with data pipelines, training, and serving.",
+  "Experiment Tracking":       "Logging metrics, parameters, artifacts — makes ML experiments reproducible.",
+  // Engineering
+  "Git":                       "Industry standard for version control. Non-negotiable for any engineering role.",
+  "Collaborative Development": "Working with teams via pull requests, code review, and shared repositories.",
+  "CI/CD":                     "Automated testing and deployment pipelines — standard in modern engineering.",
+  "Linux / CLI":               "Servers run Linux. SSH, bash, and the terminal are daily tools in research.",
+  "Operating Systems":         "Understanding processes, memory, and I/O — essential for systems programming.",
+  "Networking Basics":         "Foundational for distributed systems, REST APIs, and understanding the web.",
+  "Databases":                 "Every backend system persists data. SQL is a universal, transferable skill.",
+  "Backend Development":       "Building APIs and server-side logic — core to full-stack and MLOps roles.",
+  "System Design":             "Senior skill: designing scalable, fault-tolerant distributed systems.",
+  "APIs and Microservices":    "Modern backend architecture. How most production systems are structured.",
+  "Distributed Systems":       "How at-scale systems work: fault tolerance, consistency, and consensus.",
+  "Docker":                    "Containerization makes apps portable and reproducible across environments.",
+  "Kubernetes":                "Orchestrates containers at scale — the backbone of cloud-native deployments.",
+  "Cloud Platforms":           "AWS / GCP / Azure — where most production ML systems run.",
+  "Infrastructure as Code":    "Terraform, Ansible — define infra in code for reproducible environments.",
+  "Network Security":          "Securing systems against intrusion — increasingly required in all engineering roles.",
+  "Cryptography":              "Encryption, hashing, TLS — the mathematical basis for secure systems.",
+  "Observability":             "Logging, metrics, tracing — knowing what your system is doing in production.",
+  // Web
+  "HTML and CSS":              "The building blocks of every website. Required before learning JavaScript.",
+  "JavaScript":                "The language of the web — runs in every browser and on servers via Node.js.",
+  "TypeScript":                "Adds static types to JavaScript — dramatically reduces bugs in large codebases.",
+  "React":                     "The most widely used UI library. Powers the frontend of most modern web apps.",
+  "Next.js":                   "React + server-side rendering. Standard for production React applications.",
+  "State Management":          "Redux, Zustand — managing complex app state across React component trees.",
+  "Responsive Design":         "Layouts that work on any screen size — mandatory for any web interface.",
+  "Node.js":                   "JavaScript on the server — enables full-stack JavaScript development.",
+  "Web Performance":           "Page speed, bundle size, Core Web Vitals — critical for user experience.",
+  // Data Engineering
+  "SQL Advanced":              "Window functions, CTEs, optimization — beyond basic SELECT for data roles.",
+  "Data Warehousing":          "Snowflake, BigQuery, Redshift — where analytical data lives at scale.",
+  "dbt":                       "Transform raw data in the warehouse using SQL — the modern data stack.",
+  "Data Engineering":          "Building pipelines that move, transform, and store data reliably at scale.",
+  "Apache Spark":              "Distributed data processing for datasets too large for a single machine.",
+  "Apache Kafka":              "Real-time event streaming — the nervous system of modern data platforms.",
+  "Real-time Processing":      "Processing data as it arrives rather than in batches — low latency systems.",
+  "Workflow Orchestration":    "Airflow, Prefect — scheduling and monitoring data pipelines reliably.",
+  "Data Quality":              "Validating, testing, and monitoring data to ensure downstream systems trust it.",
+};
+
+// SKILL_DESC — used in D3 click tooltip (same as SKILL_WHY for now, alias)
+const SKILL_DESC = SKILL_WHY;
+
+// Node status → fill color
+const NODE_FILL = { known: '#16a34a', next: '#d97706', missing: '#dc2626', neutral: '#f4f4f5' };
+const NODE_TEXT = { known: '#fff',    next: '#fff',    missing: '#fff',    neutral: '#a1a1aa' };
+
+// Domain → accent color (6 domains now)
+const DOMAIN_COLOR = {
+  programming: '#3b82f6',
+  math:        '#7c3aed',
+  ml:          '#db2777',
+  engineering: '#0d9488',
+  web:         '#f59e0b',
+  data:        '#6366f1',
+};
+
+// Page title metadata
+const PAGE_META = {
+  extract: { step: 'Step 1 of 3', title: 'Paste your resume or project description' },
+  skills:  { step: 'Step 2 of 3', title: 'Review detected skills and choose a target role' },
+  roadmap: { step: 'Step 3 of 3', title: 'Your personalised learning roadmap' },
+};
+
+// ════════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════════
+
+document.addEventListener('DOMContentLoaded', () => {
+  pingAPI();
+  fetchGraphStats();
+  // Character counter on the resume textarea
+  const ta = document.getElementById('resume-input');
+  ta.addEventListener('input', () => {
+    document.getElementById('char-count').textContent =
+      `${ta.value.length.toLocaleString()} characters`;
+  });
+});
+
+// Ping GET /health — updates the status pill in the top bar
+async function pingAPI() {
+  const dot   = document.getElementById('api-dot');
+  const label = document.getElementById('api-label');
+  try {
+    const r = await fetch(`${API}/health`);
+    if (!r.ok) throw new Error();
+    dot.className     = 'api-dot ok';
+    label.textContent = 'API connected';
+  } catch {
+    dot.className     = 'api-dot err';
+    label.textContent = 'API offline';
+  }
+}
+
+// Fetch GET /roadmap/graph-info — shows node/edge counts and role names
+async function fetchGraphStats() {
+  const el = document.getElementById('graph-stats');
+  try {
+    const data = await fetchJSON(`${API}/roadmap/graph-info`);
+    state.availableRoles = data.available_roles;
+    el.innerHTML = `
+      <div class="stats-row">
+        <div><div class="stat-num">${data.total_nodes}</div><div class="stat-lbl">skill nodes</div></div>
+        <div><div class="stat-num">${data.total_edges}</div><div class="stat-lbl">edges</div></div>
+        <div>
+          <div class="stat-num" style="color:${data.is_dag ? 'var(--known)' : 'var(--missing)'}">
+            ${data.is_dag ? '✓' : '✗'}
+          </div>
+          <div class="stat-lbl">valid DAG</div>
+        </div>
+      </div>
+      <div class="text-sm text-muted">
+        Roles: ${data.available_roles.join(' · ')}
+      </div>
+    `;
+  } catch {
+    el.textContent = 'Could not load — is the API running?';
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// NAVIGATION
+// ════════════════════════════════════════════════════════════
+
+function showPage(name) {
+  ['extract', 'skills', 'roadmap'].forEach(p => {
+    document.getElementById(`page-${p}`).classList.add('hidden');
+    document.getElementById(`nav-${p}`).classList.remove('active');
+  });
+  document.getElementById(`page-${name}`).classList.remove('hidden');
+  document.getElementById(`nav-${name}`).classList.add('active');
+  document.getElementById('topbar-step').textContent  = PAGE_META[name].step;
+  document.getElementById('topbar-title').textContent = PAGE_META[name].title;
+}
+
+// ════════════════════════════════════════════════════════════
+// PAGE 1 — AI EXTRACTION
+// Endpoint: POST /extract-skills/
+// ════════════════════════════════════════════════════════════
+
+async function runExtraction() {
+  const text = document.getElementById('resume-input').value.trim();
+  if (!text) { toast('Please paste some text first', true); return; }
+
+  const btn = document.getElementById('extract-btn');
+  btn.innerHTML = '<span class="spinner"></span> Analyzing…';
+  btn.disabled  = true;
+
+  try {
+    const data = await postJSON(`${API}/extract-skills/`, { text });
+
+    state.extractedSkills = data.skills;
+    state.selectedSkills  = [...data.skills];
+    state.availableSkills = data.available_skills_in_graph;
+
+    buildSkillPage();
+    showPage('skills');
+    toast(`Found ${data.skills.length} skill${data.skills.length !== 1 ? 's' : ''}`);
+
+  } catch (err) {
+    toast('Extraction failed — is the API running?', true);
+  } finally {
+    btn.innerHTML = 'Analyze with AI';
+    btn.disabled  = false;
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// GITHUB SCANNER
+// ════════════════════════════════════════════════════════════
+
+// Switches between the "Paste Resume" and "Scan GitHub" tabs
+// on Page 1. Purely a UI toggle — no API calls.
+function switchInputTab(tab) {
+  // Update tab button styles
+  document.getElementById('tab-resume').classList.toggle('active', tab === 'resume');
+  document.getElementById('tab-github').classList.toggle('active', tab === 'github');
+
+  // Show/hide the correct panel
+  document.getElementById('panel-resume').classList.toggle('hidden', tab !== 'resume');
+  document.getElementById('panel-github').classList.toggle('hidden', tab !== 'github');
+}
+
+// Calls POST /scan-github/ with the GitHub URL/username,
+// then populates the skill page exactly like runExtraction() does.
+// Also renders the signals panel so the user can see exactly
+// which repo and file triggered each detected skill.
+async function runGithubScan() {
+  const input = document.getElementById('github-input').value.trim();
+  if (!input) { toast('Please enter a GitHub username or URL', true); return; }
+
+  const btn = document.getElementById('github-btn');
+  btn.innerHTML = '<span class="spinner"></span> Scanning…';
+  btn.disabled  = true;
+
+  // Clear any previous signals
+  document.getElementById('github-signals').classList.add('hidden');
+  document.getElementById('github-signals-list').innerHTML = '';
+
+  try {
+    const data = await postJSON(`${API}/scan-github/`, { github_input: input });
+
+    if (data.error && !data.skills.length) {
+      toast(data.error, true);
+      return;
+    }
+
+    // Populate state — same as resume extraction
+    state.extractedSkills = data.skills;
+    state.selectedSkills  = [...data.skills];
+    state.availableSkills = data.available_skills_in_graph;
+
+    // Show the signals panel (what triggered each skill)
+    renderGithubSignals(data);
+
+    // Small delay so user can see the signals before page changes
+    setTimeout(() => {
+      buildSkillPage();
+      showPage('skills');
+    }, 1200);
+
+    toast(
+      `Scanned ${data.repos_scanned} repos · Found ${data.skills.length} skill${data.skills.length !== 1 ? 's' : ''}!`
+    );
+
+  } catch (err) {
+    toast('GitHub scan failed — is the API running?', true);
+    console.error(err);
+  } finally {
+    btn.innerHTML = 'Scan Repos';
+    btn.disabled  = false;
+  }
+}
+
+// Renders the "What was found" signal breakdown panel.
+// Each signal shows: skill name | source file | what triggered it.
+// This makes the GitHub scanner fully transparent and auditable.
+function renderGithubSignals(data) {
+  const container = document.getElementById('github-signals');
+  const list      = document.getElementById('github-signals-list');
+
+  if (!data.signals || data.signals.length === 0) {
+    container.classList.remove('hidden');
+    list.innerHTML = '<div class="text-sm text-muted">No detailed signals available.</div>';
+    return;
+  }
+
+  // Success banner
+  const banner = `
+    <div class="github-success-banner">
+      ✓ Scanned ${data.repos_scanned} repositories for @${data.username}
+    </div>
+  `;
+
+  // Signal rows
+  const rows = data.signals.map(s => `
+    <div class="signal-item">
+      <div class="signal-skill">${s.skill}</div>
+      <div>
+        <div class="signal-detail">${s.source}</div>
+        <div class="signal-detail" style="margin-top:2px;opacity:0.75">${s.detail}</div>
+      </div>
+    </div>
+  `).join('');
+
+  list.innerHTML = banner + rows;
+  container.classList.remove('hidden');
+}
+
+
+
+function loadExample() {
+  const text = `I built image classification models using PyTorch and Python during my third year.
+I'm comfortable with linear algebra and took probability & statistics at university.
+I use Git daily, have worked with SQL databases, and understand basic REST APIs.
+Currently studying transformer architectures and reading NLP research papers.
+I'm familiar with Linux/CLI from working on lab GPU servers.`;
+  document.getElementById('resume-input').value = text;
+  document.getElementById('char-count').textContent = `${text.length} characters`;
+}
+
+// ════════════════════════════════════════════════════════════
+// PAGE 2 — SKILL REVIEW
+// ════════════════════════════════════════════════════════════
+
+function buildSkillPage() {
+  renderSkillTags();
+  populateDropdown('role-select',
+    [{ value: '', label: '— Choose your target role —' }].concat(
+      state.availableRoles.map(r => ({ value: r, label: r }))
+    )
+  );
+  populateDropdown('manual-skill-select',
+    [{ value: '', label: '— Select a skill to add —' }].concat(
+      state.availableSkills.map(s => ({ value: s, label: s }))
+    )
+  );
+}
+
+function renderSkillTags() {
+  const container = document.getElementById('skill-tags');
+  container.innerHTML = '';
+  state.extractedSkills.forEach(skill => {
+    container.appendChild(makeTag(skill));
+  });
+  updateSkillCount();
+}
+
+// Creates a single toggleable tag element
+function makeTag(skill) {
+  const isSelected = state.selectedSkills.includes(skill);
+  const el = document.createElement('span');
+  el.className     = `tag ${isSelected ? 'tag-on' : 'tag-off'}`;
+  el.dataset.skill = skill;
+  el.textContent   = skill;
+  el.onclick       = () => toggleSkill(skill, el);
+  return el;
+}
+
+function toggleSkill(skill, el) {
+  const idx = state.selectedSkills.indexOf(skill);
+  if (idx === -1) {
+    state.selectedSkills.push(skill);
+    el.className = 'tag tag-on';
+  } else {
+    state.selectedSkills.splice(idx, 1);
+    el.className = 'tag tag-off';
+  }
+  updateSkillCount();
+}
+
+function updateSkillCount() {
+  const n = state.selectedSkills.length;
+  document.getElementById('skill-count-label').textContent =
+    `${n} skill${n !== 1 ? 's' : ''} selected`;
+}
+
+function addManualSkill() {
+  const sel   = document.getElementById('manual-skill-select');
+  const skill = sel.value;
+  if (!skill) return;
+
+  if (!state.extractedSkills.includes(skill)) {
+    state.extractedSkills.push(skill);
+    state.selectedSkills.push(skill);
+    document.getElementById('skill-tags').appendChild(makeTag(skill));
+    updateSkillCount();
+    toast(`Added "${skill}"`);
+  } else {
+    toast(`"${skill}" is already in your list`);
+  }
+  sel.value = '';
+}
+
+// Helper: populates a <select> from an array of {value, label} objects
+function populateDropdown(id, items) {
+  const sel = document.getElementById(id);
+  sel.innerHTML = items.map(i =>
+    `<option value="${i.value}">${i.label}</option>`
+  ).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+// PAGE 3 — ROADMAP + GRAPH
+// Endpoints: POST /roadmap/ and POST /graph-data/ (parallel)
+// ════════════════════════════════════════════════════════════
+
+async function runRoadmap() {
+  state.targetRole = document.getElementById('role-select').value;
+  if (!state.targetRole)           { toast('Please choose a target role', true); return; }
+  if (!state.selectedSkills.length){ toast('Please select at least one skill', true); return; }
+
+  const btn = document.getElementById('roadmap-btn');
+  btn.innerHTML = '<span class="spinner"></span> Computing…';
+  btn.disabled  = true;
+
+  const payload = { user_skills: state.selectedSkills, target_role: state.targetRole };
+
+  try {
+    // Fire all four requests in parallel for speed
+    // roadmap + graph are blocking (needed for page render)
+    // readiness + study-plan are analytics (rendered after)
+    const [roadmap, graph, readiness, studyPlan] = await Promise.all([
+      postJSON(`${API}/roadmap/`,     payload),
+      postJSON(`${API}/graph-data/`,  payload),
+      postJSON(`${API}/readiness/`,   payload),
+      postJSON(`${API}/study-plan/`,  {
+        ...payload,
+        hours_per_week: parseInt(document.getElementById('plan-hours-select')?.value || 6),
+        months:         parseInt(document.getElementById('plan-months-select')?.value || 3),
+      }),
+    ]);
+
+    state.roadmapResult   = roadmap;
+    state.graphData       = graph;
+    state.readinessResult = readiness;
+    state.studyPlanResult = studyPlan;
+
+    renderRoadmapPage();
+    showPage('roadmap');
+    toast('Roadmap generated!');
+
+  } catch (err) {
+    toast('Failed — is the API running?', true);
+    console.error(err);
+  } finally {
+    btn.innerHTML = 'Generate Roadmap →';
+    btn.disabled  = false;
+  }
+}
+
+function renderRoadmapPage() {
+  document.getElementById('graph-role-label').textContent = `Role: ${state.targetRole}`;
+  renderD3Graph();
+  renderRoadmapSteps();
+  renderSummary();
+  renderReadinessGauge();
+  renderStudyPlan();
+}
+
+// ════════════════════════════════════════════════════════════
+// D3 v7 FORCE-DIRECTED GRAPH
+// ════════════════════════════════════════════════════════════
+//
+// ARCHITECTURE
+//   renderD3Graph()   — builds the entire SVG from scratch each
+//                       time the roadmap page loads. Tears down
+//                       any previous simulation cleanly.
+//   showTooltip(d)    — populates and reveals the detail panel
+//                       when a node is clicked.
+//   hideTooltip()     — clears panel, resets edge highlight
+//   graphZoomIn/Out/Reset() — wired to the +/−/⊙ buttons
+//
+// WHY FORCE SIMULATION?
+//   Backend sends domain-clustered seed positions. We run a
+//   brief simulation (alphaDecay=0.05, settles in ~1.5s) so
+//   overlapping nodes spread apart while staying near their
+//   cluster. After that the graph is static until dragged.
+//
+// DRAG: pins node with fx/fy while dragging, releases on end.
+// ZOOM: D3 zoom on <svg>, transforms the inner <g>.
+// CLICK: sets 'selected' class, highlights incident edges.
+// ════════════════════════════════════════════════════════════
+
+// Module-level handles so external controls can call in
+const d3Graph = {
+  svg:          null,
+  zoom:         null,
+  rootG:        null,
+  simulation:   null,
+  nodeSel:      null,
+  edgeSel:      null,
+  edgeData:     null,   // raw edge array after forceLink resolves
+};
+
+// ── Entry point ───────────────────────────────────────────────
+function renderD3Graph() {
+  const container = document.getElementById('graph-canvas');
+  container.innerHTML = '';
+
+  // Kill any previous simulation
+  if (d3Graph.simulation) {
+    d3Graph.simulation.stop();
+    d3Graph.simulation = null;
+  }
+
+  const W = container.clientWidth  || 860;
+  const H = container.clientHeight || 500;
+  const R = 19;  // node radius
+
+  const { nodes: rawNodes, edges: rawEdges } = state.graphData;
+  if (!rawNodes || rawNodes.length === 0) return;
+
+  // Deep-copy: D3 mutates x/y/vx/vy on the objects it receives
+  const nodes = rawNodes.map(n => ({ ...n }));
+  const edges = rawEdges.map(e => ({ ...e }));
+
+  // ── Map backend coordinates to pixel space ────────────────────
+  const xs   = rawNodes.map(n => n.x);
+  const ys   = rawNodes.map(n => n.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const pad  = 80;
+  const scaleX = v => pad + (v - minX) / ((maxX - minX) || 1) * (W - pad * 2);
+  const scaleY = v => pad + (v - minY) / ((maxY - minY) || 1) * (H - pad * 2);
+
+  // Set initial pixel positions (simulation starts here)
+  const seedX = {};
+  const seedY = {};
+  rawNodes.forEach(n => { seedX[n.id] = scaleX(n.x); seedY[n.id] = scaleY(n.y); });
+  nodes.forEach(n => { n.x = seedX[n.id]; n.y = seedY[n.id]; });
+
+  // ── Build SVG ─────────────────────────────────────────────────
+  const svg = d3.select(container)
+    .append('svg')
+    .attr('width',  W)
+    .attr('height', H);
+
+  // Arrow marker for directed edges
+  const defs = svg.append('defs');
+  defs.append('marker')
+    .attr('id',          'd3arr')
+    .attr('viewBox',     '0 0 10 10')
+    .attr('refX',        9)
+    .attr('refY',        5)
+    .attr('markerWidth',  6)
+    .attr('markerHeight', 6)
+    .attr('orient',      'auto-start-reverse')
+    .append('path')
+      .attr('d',    'M 0 0 L 10 5 L 0 10 z')
+      .attr('fill', '#c8c8c8');
+
+  // ── Zoom ──────────────────────────────────────────────────────
+  const zoomBehavior = d3.zoom()
+    .scaleExtent([0.2, 4])
+    .on('zoom', ev => rootG.attr('transform', ev.transform));
+
+  svg.call(zoomBehavior)
+     .on('click', () => hideTooltip());   // click background = close panel
+
+  // Root group — everything lives inside here so zoom works
+  const rootG = svg.append('g').attr('class', 'root-g');
+
+  // Store handles
+  d3Graph.svg  = svg;
+  d3Graph.zoom = zoomBehavior;
+  d3Graph.rootG = rootG;
+
+  // ── Edges ─────────────────────────────────────────────────────
+  const edgeG = rootG.append('g').attr('class', 'edge-layer');
+
+  const edgeSel = edgeG.selectAll('line.d3-edge')
+    .data(edges)
+    .enter().append('line')
+      .attr('class',      'd3-edge')
+      .attr('marker-end', 'url(#d3arr)');
+
+  d3Graph.edgeSel  = edgeSel;
+  d3Graph.edgeData = edges;
+
+  // ── Nodes ─────────────────────────────────────────────────────
+  const nodeG = rootG.append('g').attr('class', 'node-layer');
+
+  const nodeSel = nodeG.selectAll('g.d3-node')
+    .data(nodes, d => d.id)
+    .enter().append('g')
+      .attr('class', 'd3-node')
+      .attr('transform', d => `translate(${d.x},${d.y})`)
+      .call(
+        d3.drag()
+          .on('start', onDragStart)
+          .on('drag',  onDrag)
+          .on('end',   onDragEnd)
+      )
+      .on('click', function(event, d) {
+        event.stopPropagation();
+        showTooltip(d, this);
+      });
+
+  d3Graph.nodeSel = nodeSel;
+
+  // Domain glow ring — only for non-neutral nodes
+  nodeSel.filter(d => d.status !== 'neutral')
+    .append('circle')
+      .attr('class', 'glow-ring')
+      .attr('r',            R + 7)
+      .attr('fill',         'none')
+      .attr('stroke',       d => DOMAIN_COLOR[d.domain] || '#a1a1aa')
+      .attr('stroke-width', 1.4)
+      .attr('opacity',      0.25);
+
+  // Main filled circle — carries the class 'main-circle' for reset targeting
+  nodeSel.append('circle')
+    .attr('class',        'main-circle')
+    .attr('r',             R)
+    .attr('fill',          d => NODE_FILL[d.status]   || '#f4f4f5')
+    .attr('stroke',        d => d.status === 'neutral' ? '#d1d5db' : 'none')
+    .attr('stroke-width',  1.2);
+
+  // Labels — 1 or 2 lines depending on label length
+  nodeSel.each(function(d) {
+    const g    = d3.select(this);
+    const col  = NODE_TEXT[d.status] || '#9ca3af';
+    const words = d.label.split(' ');
+    const clip  = s => s.length > 11 ? s.slice(0, 10) + '…' : s;
+
+    if (words.length === 1 || d.label.length <= 9) {
+      g.append('text')
+        .attr('class',       'node-label')
+        .attr('text-anchor', 'middle')
+        .attr('dy',          '0.36em')
+        .attr('font-size',   d.label.length > 8 ? 7 : 8)
+        .attr('font-weight', 600)
+        .attr('fill',        col)
+        .attr('font-family', 'JetBrains Mono, monospace')
+        .text(clip(d.label));
+    } else {
+      const mid = Math.ceil(words.length / 2);
+      const l1  = words.slice(0, mid).join(' ');
+      const l2  = words.slice(mid).join(' ');
+      g.append('text')
+        .attr('class','node-label').attr('text-anchor','middle')
+        .attr('dy', '-0.35em').attr('font-size', 7).attr('font-weight', 600)
+        .attr('fill', col).attr('font-family', 'JetBrains Mono, monospace')
+        .text(clip(l1));
+      g.append('text')
+        .attr('class','node-label').attr('text-anchor','middle')
+        .attr('dy', '0.75em').attr('font-size', 7).attr('font-weight', 600)
+        .attr('fill', col).attr('font-family', 'JetBrains Mono, monospace')
+        .text(clip(l2));
+    }
+  });
+
+  // ── Force simulation ──────────────────────────────────────────
+  const sim = d3.forceSimulation(nodes)
+    .alpha(0.4).alphaDecay(0.05)  // settles in ~1.5s
+    .force('link',
+      d3.forceLink(edges).id(d => d.id).distance(88).strength(0.25))
+    .force('charge',
+      d3.forceManyBody().strength(-180))
+    .force('collide',
+      d3.forceCollide(R + 9).strength(0.9))
+    // Soft pull toward domain cluster seed positions
+    .force('sx', d3.forceX(d => seedX[d.id]).strength(0.1))
+    .force('sy', d3.forceY(d => seedY[d.id]).strength(0.1))
+    .on('tick', tick);
+
+  d3Graph.simulation = sim;
+
+  // ── Tick: update positions ────────────────────────────────────
+  function tick() {
+    // Clamp nodes inside canvas
+    nodes.forEach(d => {
+      d.x = Math.max(R + 2, Math.min(W - R - 2, d.x));
+      d.y = Math.max(R + 2, Math.min(H - R - 2, d.y));
+    });
+
+    // Move edges (shorten line so arrow tip touches node edge, not center)
+    edgeSel
+      .attr('x1', d => d.source.x)
+      .attr('y1', d => d.source.y)
+      .attr('x2', d => {
+        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+        const l  = Math.hypot(dx, dy) || 1;
+        return d.target.x - (dx / l) * (R + 5);
+      })
+      .attr('y2', d => {
+        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+        const l  = Math.hypot(dx, dy) || 1;
+        return d.target.y - (dy / l) * (R + 5);
+      });
+
+    // Move node groups
+    nodeSel.attr('transform', d => `translate(${d.x.toFixed(1)},${d.y.toFixed(1)})`);
+  }
+
+  // ── Drag handlers ─────────────────────────────────────────────
+  function onDragStart(event, d) {
+    if (!event.active) sim.alphaTarget(0.15).restart();
+    d.fx = d.x;  d.fy = d.y;
+    d3.select(this).classed('dragging', true);
+  }
+  function onDrag(event, d) {
+    d.fx = event.x;  d.fy = event.y;
+  }
+  function onDragEnd(event, d) {
+    if (!event.active) sim.alphaTarget(0);
+    d.fx = null;  d.fy = null;
+    d3.select(this).classed('dragging', false);
+  }
+
+  // ── Fade out hint after 4s ────────────────────────────────────
+  const hint = document.getElementById('graph-hint');
+  if (hint) setTimeout(() => hint.classList.add('fade'), 4000);
+}
+
+// ── Node detail panel ─────────────────────────────────────────
+// Opened on node click. Shows domain, name, status, description,
+// prerequisites and skills this node unlocks.
+function showTooltip(d, nodeEl) {
+  const edges = d3Graph.edgeData || [];
+
+  // Reset any previous selection first
+  _clearSelection();
+
+  // Mark this node as selected (ring + border)
+  d3.select(nodeEl).classed('selected', true);
+
+  // Highlight incident edges; dim others
+  d3Graph.edgeSel
+    .classed('lit', e =>
+      (e.source.id || e.source) === d.id ||
+      (e.target.id || e.target) === d.id
+    );
+
+  // ── Populate panel ────────────────────────────────────────────
+  const DOMAIN_LABEL = {
+    programming: 'Programming', math: 'Mathematics',
+    ml: 'ML / AI', engineering: 'Engineering',
+  };
+  const STATUS_LABEL = {
+    known: '✓ You have this',
+    next:  '→ Learn next',
+    missing: '✗ Skill gap',
+    neutral: 'Not required',
+  };
+  const STATUS_STYLE = {
+    known:   { bg:'#dcfce7', color:'#15803d' },
+    next:    { bg:'#fef3c7', color:'#92400e' },
+    missing: { bg:'#fee2e2', color:'#991b1b' },
+    neutral: { bg:'#f4f4f5', color:'#71717a' },
+  };
+
+  const domColor = DOMAIN_COLOR[d.domain] || '#a1a1aa';
+  const st = STATUS_STYLE[d.status] || STATUS_STYLE.neutral;
+
+  // Domain badge
+  const badge = document.getElementById('tt-domain-badge');
+  badge.textContent      = DOMAIN_LABEL[d.domain] || d.domain;
+  badge.style.background = domColor + '22';
+  badge.style.color      = domColor;
+  badge.style.border     = `1px solid ${domColor}44`;
+
+  // Name
+  document.getElementById('tt-name').textContent = d.label;
+
+  // Status pill
+  const statusEl = document.getElementById('tt-status');
+  statusEl.textContent      = STATUS_LABEL[d.status] || d.status;
+  statusEl.style.background = st.bg;
+  statusEl.style.color      = st.color;
+
+  // Description
+  document.getElementById('tt-desc').textContent =
+    SKILL_WHY[d.label] || 'A key skill on the path to your target role.';
+
+  // Prerequisites (edges → this node)
+  const prereqs = edges
+    .filter(e => (e.target.id || e.target) === d.id)
+    .map(e => e.source.id || e.source);
+
+  // Unlocks (edges from this node →)
+  const unlocks = edges
+    .filter(e => (e.source.id || e.source) === d.id)
+    .map(e => e.target.id || e.target);
+
+  function setSection(sectionId, listId, items) {
+    const sec  = document.getElementById(sectionId);
+    const list = document.getElementById(listId);
+    if (!sec || !list) return;
+    if (items.length === 0) {
+      sec.classList.add('hidden');
+    } else {
+      sec.classList.remove('hidden');
+      list.innerHTML = items
+        .map(s => `<span class="tt-tag">${s}</span>`)
+        .join('');
+    }
+  }
+
+  setSection('tt-prereqs',  'tt-prereqs-list', prereqs);
+  setSection('tt-leads-to', 'tt-leads-list',   unlocks);
+
+  // Show panel
+  document.getElementById('graph-tooltip').classList.remove('hidden');
+}
+
+function hideTooltip() {
+  document.getElementById('graph-tooltip').classList.add('hidden');
+  _clearSelection();
+}
+
+function _clearSelection() {
+  if (!d3Graph.rootG) return;
+  // Remove selected class from all nodes
+  d3Graph.rootG.selectAll('.d3-node').classed('selected', false);
+  // Reset all edges
+  if (d3Graph.edgeSel) d3Graph.edgeSel.classed('lit', false);
+}
+
+// ── External zoom controls ─────────────────────────────────────
+function graphZoomIn() {
+  if (!d3Graph.svg || !d3Graph.zoom) return;
+  d3Graph.svg.transition().duration(260).call(d3Graph.zoom.scaleBy, 1.4);
+}
+function graphZoomOut() {
+  if (!d3Graph.svg || !d3Graph.zoom) return;
+  d3Graph.svg.transition().duration(260).call(d3Graph.zoom.scaleBy, 0.72);
+}
+function graphReset() {
+  hideTooltip();
+  if (!d3Graph.svg || !d3Graph.zoom) return;
+  d3Graph.svg.transition().duration(380).call(d3Graph.zoom.transform, d3.zoomIdentity);
+}
+
+
+
+// ── Roadmap Step List ──────────────────────────────────────────
+// Flattens all learning paths into one ordered, deduplicated list.
+// Each step shows the skill name, domain badge, and "why" text.
+function renderRoadmapSteps() {
+  const container = document.getElementById('roadmap-steps');
+  container.innerHTML = '';
+
+  const { learning_paths, known_skills } = state.roadmapResult;
+
+  // Walk all paths in order, deduplicate, skip already-known skills
+  const seen  = new Set(known_skills);
+  const steps = [];
+  Object.values(learning_paths).forEach(path => {
+    path.forEach(skill => {
+      if (!seen.has(skill)) { seen.add(skill); steps.push(skill); }
+    });
+  });
+
+  if (steps.length === 0) {
+    container.innerHTML =
+      '<p class="text-sm text-muted" style="padding:12px 0">You already have all required skills!</p>';
+    return;
+  }
+
+  steps.forEach((skill, i) => {
+    const why    = SKILL_WHY[skill] || 'A key skill on the path to your target role.';
+    const domain = state.graphData?.nodes.find(n => n.id === skill)?.domain || 'programming';
+    const dcol   = DOMAIN_COLOR[domain] || '#a1a1aa';
+
+    const div = document.createElement('div');
+    div.className = 'step';
+    div.innerHTML = `
+      <div class="step-num">${i + 1}</div>
+      <div>
+        <div class="step-domain" style="background:${dcol}18;color:${dcol}">${domain}</div>
+        <div class="step-name">${skill}</div>
+        <div class="step-why">${why}</div>
+      </div>
+    `;
+    container.appendChild(div);
+  });
+}
+
+// ── Summary Panel ──────────────────────────────────────────────
+// Shows readiness bar, known skill tags, and gap tags.
+function renderSummary() {
+  const { known_skills, missing_skills } = state.roadmapResult;
+  const total = (known_skills.length + missing_skills.length) || 1;
+  const pct   = Math.round(known_skills.length / total * 100);
+
+  document.getElementById('summary-panel').innerHTML = `
+    <div>
+      <div class="row-between" style="margin-bottom:6px">
+        <span class="text-sm text-muted">Role readiness</span>
+        <span style="font-size:13px;font-weight:700">${pct}%</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+      <div class="text-sm text-muted mt-2">${known_skills.length} of ${total} required skills</div>
+    </div>
+    <div>
+      <div class="card-label" style="margin-bottom:8px;margin-top:16px">You Have</div>
+      <div class="tags">
+        ${known_skills.length
+          ? known_skills.map(s => `<span class="tag tag-known">${s}</span>`).join('')
+          : '<span class="text-sm text-muted">None of the required skills yet</span>'}
+      </div>
+    </div>
+    <div>
+      <div class="card-label" style="margin-bottom:8px;margin-top:16px">Gaps (${missing_skills.length})</div>
+      <div class="tags">
+        ${missing_skills.map(s => `<span class="tag tag-missing">${s}</span>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ════════════════════════════════════════════════════════════
+// ANALYTICS — READINESS GAUGE
+// ════════════════════════════════════════════════════════════
+
+// Renders a circular SVG progress gauge showing the readiness score.
+// Uses pure SVG stroke-dashoffset animation — no Canvas, no library.
+//
+// How the gauge works:
+//   - A background <circle> forms the grey track
+//   - A foreground <circle> is given a stroke-dasharray matching
+//     the full circumference, then stroke-dashoffset is set to
+//     (1 - score/100) × circumference, revealing only the scored portion
+//   - CSS transition animates the dashoffset change smoothly
+function renderReadinessGauge() {
+  const r = state.readinessResult;
+  if (!r) return;
+
+  const score = r.score;
+  const SIZE  = 160;         // SVG viewport size
+  const RADIUS = 60;         // Circle radius
+  const CX = SIZE / 2;
+  const CY = SIZE / 2;
+  const CIRC = 2 * Math.PI * RADIUS;  // Full circumference
+
+  // Color based on score band
+  const scoreColor = score >= 70 ? '#16a34a' : score >= 40 ? '#d97706' : '#dc2626';
+
+  // Offset = how much of the arc is HIDDEN (unfilled)
+  // score 100 → offset 0 (fully revealed)
+  // score 0   → offset CIRC (fully hidden)
+  const offset = CIRC * (1 - score / 100);
+
+  // Build SVG string — easier than DOM for complex SVG elements
+  const gaugeSVG = `
+    <svg class="gauge-svg" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}">
+      <!-- Track: full grey circle -->
+      <circle
+        class="gauge-track"
+        cx="${CX}" cy="${CY}" r="${RADIUS}"
+        stroke-width="12"
+        transform="rotate(-90 ${CX} ${CY})"
+      />
+      <!-- Fill: colored arc, animated via stroke-dashoffset -->
+      <circle
+        class="gauge-fill"
+        cx="${CX}" cy="${CY}" r="${RADIUS}"
+        stroke="${scoreColor}"
+        stroke-width="12"
+        stroke-dasharray="${CIRC.toFixed(2)}"
+        stroke-dashoffset="${CIRC.toFixed(2)}"
+        transform="rotate(-90 ${CX} ${CY})"
+        id="gauge-fill-circle"
+      />
+      <!-- Center: score number -->
+      <text
+        class="gauge-center-text"
+        x="${CX}" y="${CY - 6}"
+        text-anchor="middle" dominant-baseline="middle"
+        font-size="28" fill="${scoreColor}"
+      >${score}</text>
+      <text
+        class="gauge-sub-text"
+        x="${CX}" y="${CY + 22}"
+        text-anchor="middle"
+        font-size="10" fill="#71717a"
+      >out of 100</text>
+    </svg>
+  `;
+
+  document.getElementById('readiness-gauge').innerHTML = gaugeSVG;
+
+  // Animate after a short delay (allows browser to paint first)
+  setTimeout(() => {
+    const fill = document.getElementById('gauge-fill-circle');
+    if (fill) fill.style.strokeDashoffset = offset.toFixed(2);
+  }, 80);
+
+  // Interpretation text
+  document.getElementById('readiness-interpretation').textContent = r.interpretation;
+
+  // Score breakdown bars
+  const breakdown = document.getElementById('score-breakdown');
+  const covPct  = (r.component_coverage  / 60  * 100).toFixed(0);
+  const proxPct = (r.component_proximity / 40  * 100).toFixed(0);
+  const diffClass = { Low: 'diff-low', Medium: 'diff-medium', High: 'diff-high' }[r.estimated_difficulty] || 'diff-medium';
+
+  breakdown.innerHTML = `
+    <div class="score-item">
+      <div class="score-item-label">
+        <span>Coverage (skills held)</span>
+        <span>${r.component_coverage.toFixed(1)} / 60</span>
+      </div>
+      <div class="score-item-bar-track">
+        <div class="score-item-bar-fill" style="width:${covPct}%;background:#16a34a"></div>
+      </div>
+    </div>
+    <div class="score-item">
+      <div class="score-item-label">
+        <span>Proximity (graph closeness)</span>
+        <span>${r.component_proximity.toFixed(1)} / 40</span>
+      </div>
+      <div class="score-item-bar-track">
+        <div class="score-item-bar-fill" style="width:${proxPct}%;background:#3b82f6"></div>
+      </div>
+    </div>
+    <div class="score-item text-sm text-muted" style="margin-top:4px">
+      <div>Avg. graph distance to gaps: <b style="color:var(--text)">${r.avg_graph_distance} hops</b></div>
+      <div style="margin-top:4px">Known: <b style="color:var(--text)">${r.known_skills_count}</b> · Missing: <b style="color:var(--text)">${r.missing_skills_count}</b> of ${r.total_required} required</div>
+    </div>
+    <div>
+      <span class="score-difficulty ${diffClass}">
+        ${r.estimated_difficulty} Difficulty
+      </span>
+    </div>
+  `;
+}
+
+// ════════════════════════════════════════════════════════════
+// ANALYTICS — STUDY PLAN TABLE
+// ════════════════════════════════════════════════════════════
+
+// Renders the week-by-week study plan as an HTML table.
+// Called on first load and again when the user changes the
+// months/hours dropdowns via refreshStudyPlan().
+function renderStudyPlan() {
+  const plan = state.studyPlanResult;
+  if (!plan) return;
+
+  document.getElementById('study-plan-summary').textContent = plan.summary;
+
+  const container = document.getElementById('study-plan-table');
+
+  if (!plan.weeks || plan.weeks.length === 0) {
+    container.innerHTML = '<p class="text-sm text-muted">No study plan needed — already qualified!</p>';
+    return;
+  }
+
+  // Difficulty → style class mapping
+  const DIFF_CLASS = { Light: 'diff-low', Moderate: 'diff-medium', Intensive: 'diff-high' };
+
+  const rows = plan.weeks.map(block => {
+    const wk    = block.week_start === block.week_end
+      ? `Wk ${block.week_start}`
+      : `Wk ${block.week_start}–${block.week_end}`;
+    const dCls  = DIFF_CLASS[block.difficulty] || 'diff-medium';
+    return `
+      <tr>
+        <td class="plan-week">${wk}</td>
+        <td class="plan-skill">${block.skill}</td>
+        <td><span class="plan-diff ${dCls}">${block.difficulty}</span></td>
+        <td style="color:var(--muted);font-weight:600">${block.hours_required}h</td>
+        <td class="plan-tip">${block.study_tips}</td>
+      </tr>
+    `;
+  }).join('');
+
+  container.innerHTML = `
+    <table class="plan-table">
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th>Skill</th>
+          <th>Intensity</th>
+          <th>Hours</th>
+          <th>Study Tip</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+// Called when user changes months/hours dropdowns.
+// Re-fetches the study plan from the backend with new parameters.
+async function refreshStudyPlan() {
+  if (!state.targetRole || !state.selectedSkills.length) return;
+
+  const months  = parseInt(document.getElementById('plan-months-select').value);
+  const hours   = parseInt(document.getElementById('plan-hours-select').value);
+
+  document.getElementById('study-plan-summary').textContent = 'Recalculating…';
+  document.getElementById('study-plan-table').innerHTML =
+    '<div class="analytics-loading"><span class="spinner-dark"></span> Updating plan…</div>';
+
+  try {
+    state.studyPlanResult = await postJSON(`${API}/study-plan/`, {
+      user_skills:    state.selectedSkills,
+      target_role:    state.targetRole,
+      hours_per_week: hours,
+      months:         months,
+    });
+    renderStudyPlan();
+  } catch (err) {
+    document.getElementById('study-plan-summary').textContent = 'Failed to update — is the API running?';
+    console.error(err);
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// PDF REPORT DOWNLOAD
+// ════════════════════════════════════════════════════════════
+
+// Builds the GET /report/ URL with query params and navigates to it.
+// The browser will receive a PDF with Content-Disposition: attachment
+// and prompt a native file download — no JS file-handling needed.
+function downloadReport() {
+  if (!state.targetRole || !state.selectedSkills.length) {
+    toast('Generate a roadmap first', true);
+    return;
+  }
+
+  const name    = document.getElementById('report-name-input').value.trim() || 'Student';
+  const months  = document.getElementById('plan-months-select')?.value || 3;
+  const hours   = document.getElementById('plan-hours-select')?.value  || 6;
+
+  const params = new URLSearchParams({
+    user_skills:    state.selectedSkills.join(','),
+    target_role:    state.targetRole,
+    student_name:   name,
+    months:         months,
+    hours_per_week: hours,
+  });
+
+  // Navigate to the endpoint — browser handles the PDF download
+  const url = `${API}/report/?${params.toString()}`;
+  window.open(url, '_blank');
+  toast('Opening PDF report…');
+}
+
+// ════════════════════════════════════════════════════════════
+// UTILITIES
+// ════════════════════════════════════════════════════════════
+
+// Typed fetch helpers — reduce repetition in API calls
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+async function postJSON(url, body) {
+  const r = await fetch(url, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+// Toast notification
+let _toastTimer;
+function toast(msg, isError = false) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className   = `toast${isError ? ' error' : ''} show`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+}
+</script>
+
+</body>
+</html>
