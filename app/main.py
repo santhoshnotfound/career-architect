@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
 from app.routes import health, skills, roadmap, extract, graph_data, readiness, study_plan, report, github_scan, feedback
+from app.routes import auth, users  # Phase 3: user accounts
 
 # ── Create all tables defined in models.py ──────────────────
 # This runs once when the server starts. If tables already
@@ -59,6 +60,8 @@ app.include_router(study_plan.router)    # Semester learning planner
 app.include_router(report.router)        # Academic PDF report generator
 app.include_router(github_scan.router)   # GitHub profile scanner
 app.include_router(feedback.router)       # Feedback on skill extraction
+app.include_router(auth.router)           # Phase 3: POST /auth/register, /auth/login
+app.include_router(users.router)          # Phase 3: GET /users/me, /users/history; POST /users/save-profile
 
 
 @app.get("/", include_in_schema=False)

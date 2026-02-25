@@ -5,3 +5,6 @@ pydantic
 networkx
 httpx
 reportlab
+bcrypt
+python-jose[cryptography]
+email-validator
