@@ -8,12 +8,28 @@
 #   - Calling the graph engine
 #   - Formatting and returning HTTP responses
 #   - Converting engine errors into correct HTTP status codes
+#
+# Phase 3 addition:
+#   generate_roadmap() now accepts an optional authenticated user.
+#   If a valid JWT is present, the result is saved to RoadmapHistory
+#   as a best-effort side-effect. The response shape is UNCHANGED.
+#   Unauthenticated requests continue to work exactly as before.
 # ============================================================
 
-from fastapi import APIRouter, HTTPException, status
+import logging
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.graph_engine import compute_skill_gap, get_graph_summary
+from app.database import get_db
+from app import crud
+from app.models import User
+from app.auth.dependencies import get_optional_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/roadmap",
@@ -79,7 +95,11 @@ class GraphInfoResponse(BaseModel):
     status_code=status.HTTP_200_OK,
     summary="Generate a personalised learning roadmap",
 )
-def generate_roadmap(request: RoadmapRequest):
+def generate_roadmap(
+    request: RoadmapRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
     """
     Core endpoint. Accepts a student's current skills and a
     target role, then returns:
@@ -88,6 +108,11 @@ def generate_roadmap(request: RoadmapRequest):
     - Which required skills are missing (**missing_skills**)
     - For each missing skill: the shortest prerequisite path
       from their existing knowledge to that skill (**learning_paths**)
+
+    **Auth is optional.** Anonymous calls work exactly as before.
+    Authenticated calls (valid `Authorization: Bearer <token>` header)
+    additionally save the result to the user's roadmap history —
+    visible later via `GET /users/history`.
 
     ### Example Request
     ```json
@@ -115,6 +140,27 @@ def generate_roadmap(request: RoadmapRequest):
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
         )
+
+    # ── Phase 3: optional history save ───────────────────────────
+    # Only runs if the request included a valid bearer token.
+    # Wrapped in try/except so a DB failure here never breaks the
+    # core roadmap response — history is a best-effort side-effect.
+    if current_user is not None:
+        try:
+            crud.create_history_entry(
+                db             = db,
+                user_id        = current_user.id,
+                role           = request.target_role,
+                known_skills   = result["known_skills"],
+                missing_skills = result["missing_skills"],
+                readiness_score= None,  # computed separately via POST /readiness/
+            )
+        except Exception:
+            logger.warning(
+                "Failed to save roadmap history for user %d",
+                current_user.id,
+                exc_info=True,
+            )
 
     return RoadmapResponse(
         target_role=request.target_role,
