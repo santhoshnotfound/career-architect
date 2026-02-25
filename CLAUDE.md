@@ -15,8 +15,9 @@
 5. Generates a prerequisite-ordered learning roadmap and week-by-week study plan
 6. Produces a downloadable PDF report
 7. Displays an interactive D3.js skill graph in a single-page frontend
+8. Supports optional user accounts (Phase 3): register/login with JWT, save profile, persist roadmap history
 
-The codebase is designed to be fully auditable — scoring is deterministic and the graph is static.
+The codebase is designed to be fully auditable — scoring is deterministic and the graph is static. Auth is **optional** — all analysis endpoints work anonymously.
 
 ---
 
@@ -27,10 +28,15 @@ The codebase is designed to be fully auditable — scoring is deterministic and 
 ├── app/                    # All backend Python code
 │   ├── main.py             # FastAPI app factory, CORS, router registration
 │   ├── database.py         # SQLite engine, SessionLocal, Base
-│   ├── models.py           # SQLAlchemy ORM models
+│   ├── models.py           # SQLAlchemy ORM models (5 tables)
 │   ├── schemas.py          # Pydantic request/response models
 │   ├── crud.py             # DB CRUD helpers
 │   ├── graph_engine.py     # Knowledge graph + gap analysis (CORE)
+│   ├── auth/               # Phase 3: JWT auth package
+│   │   ├── __init__.py
+│   │   ├── security.py     # bcrypt password hashing
+│   │   ├── auth.py         # JWT creation + verification
+│   │   └── dependencies.py # get_current_user / get_optional_current_user
 │   ├── routes/             # One file per API endpoint group
 │   ├── ai/                 # Skill extraction and GitHub scanning
 │   └── analytics/          # Readiness scoring, study planner, PDF report
@@ -54,26 +60,90 @@ The codebase is designed to be fully auditable — scoring is deterministic and 
 - **SQLite** via SQLAlchemy ORM (no migrations — tables created on startup)
 
 ### Startup Flow (`app/main.py`)
-1. `Base.metadata.create_all(bind=engine)` — creates `skills` and `feedback` tables if absent
+1. `Base.metadata.create_all(bind=engine)` — creates all 5 tables if absent
 2. All routers registered with `app.include_router(...)`
 3. CORS middleware allows all origins (development-safe; tighten for production)
 
 ### Database (`app/database.py`, `app/models.py`)
 
-Two tables:
+Five tables — original two plus three added in Phase 3:
 
 | Table | Columns | Purpose |
 |-------|---------|---------|
 | `skills` | id, name (unique) | Persisted skill records |
 | `feedback` | id, rating, resume_snippet, detected_skills, correct_skills, target_role, source, created_at | User feedback on extraction quality |
+| `users` | id, email (unique), hashed_password, created_at | Registered user accounts |
+| `user_profiles` | id, user_id (FK, unique), selected_skills (JSON Text), target_role, last_updated | One saved profile per user |
+| `roadmap_history` | id, user_id (FK), role, known_skills (JSON Text), missing_skills (JSON Text), readiness_score, created_at | Append-only log of roadmap runs |
 
 `career.db` is committed to the repo and auto-created if deleted. For production use PostgreSQL by changing `DATABASE_URL` in `database.py` — the ORM abstracts the rest.
 
+> **JSON Text columns:** `user_profiles.selected_skills`, `roadmap_history.known_skills`, and `roadmap_history.missing_skills` store Python lists as JSON strings (`json.dumps`). Always use `json.loads(value or "[]")` when reading them back. This logic lives in `crud.py` (write) and `app/routes/users.py` (read).
+
+> **`last_updated` on UserProfile:** Uses `default=datetime.utcnow, onupdate=datetime.utcnow` (Python-side callbacks, no parentheses) because SQLite has no server-side `ON UPDATE` trigger. The CRUD layer sets this explicitly on both INSERT and UPDATE paths.
+
 ### Schemas (`app/schemas.py`)
-Pydantic models for request/response validation. Keep these in sync with route handlers. `from_attributes = True` is set to support ORM → Pydantic conversion.
+Pydantic models for request/response validation. Keep these in sync with route handlers. `from_attributes = True` is set on read schemas to support ORM → Pydantic conversion.
+
+Phase 3 schemas: `UserRegister`, `UserLogin`, `TokenResponse`, `ProfileSave`, `ProfileRead`, `HistoryEntry`.
 
 ### CRUD (`app/crud.py`)
-Thin wrappers: `create_skill`, `get_all_skills`, `get_skill_by_name`. All DB writes go through here — do not write raw SQL in routes.
+All DB writes go through here — do not write raw SQL in routes.
+
+| Function | Purpose |
+|----------|---------|
+| `create_skill` | Insert skill record |
+| `get_all_skills` | List all skills |
+| `create_user` | Insert user, raises `ValueError` on duplicate email |
+| `get_user_by_email` | Lookup by email (used by login) |
+| `get_user_by_id` | Lookup by PK |
+| `upsert_profile` | Create or overwrite user profile (SELECT-then-INSERT-or-UPDATE) |
+| `get_profile` | Fetch user profile row |
+| `create_history_entry` | Append one roadmap run to history |
+| `get_user_history` | Return N most-recent history rows, newest-first |
+
+---
+
+## Auth Package (`app/auth/`)
+
+### `security.py` — Password Hashing
+Uses `bcrypt` library **directly** (not via `passlib`, which is incompatible with `bcrypt >= 4.x`).
+
+```python
+hash_password(plain: str) -> str       # bcrypt.hashpw + gensalt, returns UTF-8 string
+verify_password(plain: str, hashed: str) -> bool  # bcrypt.checkpw, returns False on malformed hash
+```
+
+Also exports `SECRET_KEY` (loaded from `os.environ.get("SECRET_KEY", "dev-insecure-...")`) — used by `auth.py`. A startup warning is logged if the default is used.
+
+### `auth.py` — JWT Tokens
+HS256, configurable expiry (default 24h via `ACCESS_TOKEN_EXPIRE_HOURS` env var).
+
+```python
+create_access_token(subject: str, expires_delta=None) -> str
+    # Embeds 'sub' = user email, 'exp' = UTC expiry. Uses timezone-aware datetime.
+
+decode_access_token(token: str) -> str | None
+    # Returns email string or None on any failure (expired, bad sig, malformed).
+    # Never raises — callers decide whether to 401 or silently ignore.
+```
+
+### `dependencies.py` — FastAPI Dependencies
+```python
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
+# auto_error=False is CRITICAL: absent header yields token=None instead of HTTP 401,
+# enabling the optional-auth pattern used by POST /roadmap/.
+
+get_current_user(token, db) -> User
+    # Raises HTTP 401 if token is absent, invalid, or email not in DB.
+    # Use on routes that REQUIRE a logged-in user.
+
+get_optional_current_user(token, db) -> User | None
+    # Returns None silently for any token failure.
+    # Use on routes where auth adds value but isn't required (e.g. POST /roadmap/).
+```
+
+FastAPI deduplicates `Depends(get_db)` — only one DB session is created per request even when multiple dependencies reference it.
 
 ---
 
@@ -86,7 +156,7 @@ Each file registers one logical group. All files follow the same pattern:
 |------|-----------|-------|
 | `health.py` | `GET /health` | Returns `{"status": "ok"}` |
 | `skills.py` | `POST /skills/`, `GET /skills/` | Simple CRUD for skill records |
-| `roadmap.py` | `POST /roadmap/`, `GET /roadmap/graph-info` | Calls `graph_engine.compute_skill_gap()` |
+| `roadmap.py` | `POST /roadmap/`, `GET /roadmap/graph-info` | Calls `graph_engine.compute_skill_gap()`; optionally saves history if user is authenticated |
 | `extract.py` | `POST /extract-skills/` | Delegates to `ai/skill_extractor.py` |
 | `graph_data.py` | `POST /graph-data/` | Returns D3-formatted nodes/edges |
 | `readiness.py` | `POST /readiness/` | Calls `analytics/readiness.py` |
@@ -94,8 +164,12 @@ Each file registers one logical group. All files follow the same pattern:
 | `report.py` | `GET /report/` | Streams a PDF via `analytics/report.py` |
 | `github_scan.py` | `POST /scan-github/` | Delegates to `ai/github_scanner.py` |
 | `feedback.py` | `POST /feedback/`, `GET /feedback/summary` | Stores user ratings |
+| `auth.py` | `POST /auth/register`, `POST /auth/login` | Phase 3: user creation and JWT issuance |
+| `users.py` | `GET /users/me`, `POST /users/save-profile`, `GET /users/history` | Phase 3: profile and history (all require auth) |
 
-**Guiding rule:** Routes are thin — no business logic. Pass inputs to the relevant engine/analytics module and return the result.
+**Guiding rule:** Routes are thin — no business logic. Pass inputs to the relevant engine/analytics/auth module and return the result.
+
+**Auth pattern in `roadmap.py`:** The `generate_roadmap` route uses `Depends(get_optional_current_user)`. After `compute_skill_gap()` succeeds, if a user is authenticated, `crud.create_history_entry()` is called in a `try/except` block. A DB failure there logs a warning but never breaks the roadmap response — history is a best-effort side-effect.
 
 ---
 
@@ -286,13 +360,15 @@ Change this for local development: `const API = "http://localhost:8000";`
 
 All requests/responses are JSON unless noted. Interactive docs: `GET /docs`.
 
+### Original Endpoints (no auth required)
+
 | Method | Path | Body | Returns |
 |--------|------|------|---------|
 | `GET` | `/health` | — | `{"status": "ok"}` |
 | `POST` | `/skills/` | `{"name": "Python"}` | `{"id": 1, "name": "Python"}` |
 | `GET` | `/skills/` | — | `[{"id":1,"name":"Python"},...]` |
 | `POST` | `/extract-skills/` | `{"text": "...resume text..."}` | `{"skills":[],"total_found":N,"available_skills_in_graph":M}` |
-| `POST` | `/roadmap/` | `{"user_skills":[],"target_role":""}` | `{"target_role":"","known_skills":[],"missing_skills":[],"learning_paths":{}}` |
+| `POST` | `/roadmap/` | `{"user_skills":[],"target_role":""}` | `{"target_role":"","known_skills":[],"missing_skills":[],"learning_paths":{}}` — also saves history if Bearer token present |
 | `GET` | `/roadmap/graph-info` | — | `{"total_nodes":83,"total_edges":N,"all_skills":[],"available_roles":[],"is_dag":true}` |
 | `POST` | `/graph-data/` | `{"user_skills":[],"target_role":""}` | `{"nodes":[],"edges":[],"available_roles":[]}` |
 | `POST` | `/readiness/` | `{"user_skills":[],"target_role":""}` | `{"score":0,"component_coverage":0,"component_proximity":0,...}` |
@@ -301,6 +377,21 @@ All requests/responses are JSON unless noted. Interactive docs: `GET /docs`.
 | `POST` | `/scan-github/` | `{"github_input":"github.com/username"}` | `{"username":"","skills":[],"repos_scanned":N,"signals":[]}` |
 | `POST` | `/feedback/` | `{"rating":"good"/"bad","resume_snippet":"","detected_skills":"","target_role":"","source":""}` | `{"id":1,"rating":"good","message":"..."}` |
 | `GET` | `/feedback/summary` | — | `{"total":N,"good":N,"bad":N,"good_pct":0.0}` |
+
+### Phase 3 Auth Endpoints (no token required)
+
+| Method | Path | Body | Returns |
+|--------|------|------|---------|
+| `POST` | `/auth/register` | `{"email":"...","password":"..."}` | `{"access_token":"eyJ...","token_type":"bearer"}` — HTTP 409 if email taken |
+| `POST` | `/auth/login` | `{"email":"...","password":"..."}` | `{"access_token":"eyJ...","token_type":"bearer"}` — HTTP 401 on bad credentials |
+
+### Phase 3 User Endpoints (Bearer token required)
+
+| Method | Path | Body / Params | Returns |
+|--------|------|------|---------|
+| `GET` | `/users/me` | — | `{"id":1,"email":"...","created_at":"...","selected_skills":[],"target_role":null,"last_updated":null}` |
+| `POST` | `/users/save-profile` | `{"selected_skills":[],"target_role":""}` | `ProfileRead` (same shape as `/users/me`) |
+| `GET` | `/users/history` | Query: `limit` (1–100, default 20) | `[{"id":1,"role":"...","known_skills":[],"missing_skills":[],"readiness_score":null,"created_at":"..."}]` newest-first |
 
 ---
 
@@ -314,6 +405,15 @@ OPENAI_MODEL=gpt-4o-mini                     # Default model
 
 # Optional — raises GitHub API rate limit from 60 → 5000 req/hour
 GITHUB_TOKEN=ghp_...
+
+# Optional — JWT secret key for user accounts (Phase 3)
+# Generate: python -c "import secrets; print(secrets.token_hex(32))"
+# If absent, a hardcoded dev fallback is used with a startup warning.
+# Set this to a real secret in any non-local environment.
+SECRET_KEY=your-random-64-hex-chars-here
+
+# Optional — JWT expiry in hours (default: 24)
+ACCESS_TOKEN_EXPIRE_HOURS=24
 ```
 
 Copy `.env.example` to `.env` and fill in values. Never commit `.env`.
@@ -352,6 +452,29 @@ Railway injects `$PORT` automatically. The SQLite database (`career.db`) is ephe
 2. Import and register in `app/main.py`: `app.include_router(my_router, tags=["My Feature"])`
 3. Put business logic in a new `app/analytics/` or `app/ai/` module, not in the route
 
+### Add a protected endpoint (requires login)
+```python
+from app.auth.dependencies import get_current_user
+from app.models import User
+
+@router.get("/my-protected-route")
+def my_route(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # current_user is a fully loaded User ORM object
+    ...
+```
+
+### Add an optionally authenticated endpoint
+```python
+from typing import Optional
+from app.auth.dependencies import get_optional_current_user
+
+@router.post("/my-optional-route")
+def my_route(current_user: Optional[User] = Depends(get_optional_current_user), ...):
+    if current_user:
+        # do something extra for logged-in users
+    # always return the core response
+```
+
 ### Change the frontend API URL (local dev)
 In `index.html`, find:
 ```js
@@ -377,3 +500,8 @@ uvicorn app.main:app --reload
 - `GET /report/` must return a `StreamingResponse` with `media_type="application/pdf"`. Do not save PDFs to disk.
 - SQLite tables are created automatically on startup. Never require manual DB setup in development.
 - The frontend is a single `index.html` file with no build step. Keep it that way unless explicitly migrating to a framework.
+- **Auth is optional.** All analysis endpoints (`/roadmap/`, `/readiness/`, `/extract-skills/`, etc.) must remain fully functional without a Bearer token. Never make them require auth.
+- **Never store plain-text passwords.** Always call `hash_password()` from `app/auth/security.py` before writing to the DB.
+- **Use `bcrypt` directly** (not `passlib`) — `passlib` is incompatible with `bcrypt >= 4.x`. Do not add `passlib` back.
+- **JSON Text columns** (`selected_skills`, `known_skills`, `missing_skills`) must always be serialized with `json.dumps()` on write and deserialized with `json.loads(value or "[]")` on read. Never store a raw Python list in a Text column.
+- `SECRET_KEY` defaults to an insecure dev string with a startup warning. Any production deployment must set a real key via the environment.
