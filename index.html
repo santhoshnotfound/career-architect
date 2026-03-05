@@ -601,6 +601,51 @@
     ───────────────────────────────────────────────────────── */
     .info-block { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
     .info-block b { color: var(--text); font-weight: 600; }
+
+    /* ─────────────────────────────────────────────────────────
+       AUTH FORMS
+    ───────────────────────────────────────────────────────── */
+    .auth-input {
+      width: 100%; padding: 10px 14px;
+      border: 1px solid var(--border); border-radius: 8px;
+      font-family: var(--font); font-size: 13.5px;
+      background: var(--bg); color: var(--text);
+      outline: none; transition: border-color 0.15s;
+    }
+    .auth-input:focus { border-color: #71717a; }
+    .auth-label {
+      font-size: 11.5px; font-weight: 600; color: var(--muted);
+      margin-bottom: 5px; display: block;
+    }
+    .auth-field { display: flex; flex-direction: column; gap: 5px; }
+    .auth-error { font-size: 12px; color: var(--missing); font-weight: 500; min-height: 16px; }
+    .auth-user-info {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+    }
+    .auth-avatar {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: var(--text); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; font-weight: 700; flex-shrink: 0;
+    }
+    .history-row {
+      padding: 12px 0; border-bottom: 1px solid var(--border);
+      display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start;
+    }
+    .history-row:last-child { border-bottom: none; }
+    .history-role { font-weight: 700; font-size: 13px; }
+    .history-meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+    .history-score {
+      font-size: 20px; font-weight: 800; color: var(--known); line-height: 1;
+    }
+    .history-score.low  { color: var(--missing); }
+    .history-score.mid  { color: var(--next); }
+    /* Sidebar auth indicator */
+    .nav-auth-email {
+      font-size: 10px; color: rgba(255,255,255,0.45);
+      padding: 0 12px; margin-top: -2px; margin-bottom: 4px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
   </style>
 </head>
 <body>
@@ -623,6 +668,11 @@
     <button class="nav-btn" id="nav-roadmap" onclick="showPage('roadmap')">
       <span class="nav-badge">3</span> Roadmap + Graph
     </button>
+
+    <button class="nav-btn" id="nav-auth" onclick="showPage('auth')">
+      <span class="nav-badge">⬡</span> Account
+    </button>
+    <div id="nav-auth-email" class="nav-auth-email hidden"></div>
 
     <div class="sidebar-spacer"></div>
     <div class="sidebar-footer">
@@ -970,6 +1020,92 @@ reading NLP papers and learning about transformer architectures independently.">
 
     </div><!-- /page-roadmap -->
 
+    <!-- ──────────────────────────────
+         PAGE: Account (login / register / profile)
+    ────────────────────────────── -->
+    <div id="page-auth" class="page stack gap-6 hidden">
+
+      <!-- ── Logged-out: login / register tabs ── -->
+      <div id="auth-logged-out" class="card" style="max-width:460px;padding:0;overflow:hidden">
+        <div class="input-tabs">
+          <button class="input-tab active" id="tab-login"    onclick="switchAuthTab('login')">Sign In</button>
+          <button class="input-tab"        id="tab-register" onclick="switchAuthTab('register')">Create Account</button>
+        </div>
+
+        <!-- Login panel -->
+        <div id="panel-login" style="padding:28px 24px">
+          <div class="stack gap-4">
+            <div class="auth-field">
+              <label class="auth-label" for="login-email">Email</label>
+              <input class="auth-input" id="login-email" type="email" placeholder="you@example.com" autocomplete="email"
+                     onkeydown="if(event.key==='Enter') doLogin()" />
+            </div>
+            <div class="auth-field">
+              <label class="auth-label" for="login-password">Password</label>
+              <input class="auth-input" id="login-password" type="password" placeholder="••••••••" autocomplete="current-password"
+                     onkeydown="if(event.key==='Enter') doLogin()" />
+            </div>
+            <div id="login-error" class="auth-error"></div>
+            <button class="btn btn-primary" id="login-btn" onclick="doLogin()">Sign In</button>
+          </div>
+          <p class="text-sm text-muted mt-3">
+            No account?
+            <a href="#" onclick="switchAuthTab('register');return false" style="color:var(--text);font-weight:600">Create one →</a>
+          </p>
+        </div>
+
+        <!-- Register panel -->
+        <div id="panel-register" class="hidden" style="padding:28px 24px">
+          <div class="stack gap-4">
+            <div class="auth-field">
+              <label class="auth-label" for="reg-email">Email</label>
+              <input class="auth-input" id="reg-email" type="email" placeholder="you@example.com" autocomplete="email"
+                     onkeydown="if(event.key==='Enter') doRegister()" />
+            </div>
+            <div class="auth-field">
+              <label class="auth-label" for="reg-password">Password</label>
+              <input class="auth-input" id="reg-password" type="password" placeholder="At least 8 characters" autocomplete="new-password"
+                     onkeydown="if(event.key==='Enter') doRegister()" />
+            </div>
+            <div id="reg-error" class="auth-error"></div>
+            <button class="btn btn-primary" id="reg-btn" onclick="doRegister()">Create Account</button>
+          </div>
+          <p class="text-sm text-muted mt-3">
+            Already have an account?
+            <a href="#" onclick="switchAuthTab('login');return false" style="color:var(--text);font-weight:600">Sign in →</a>
+          </p>
+        </div>
+      </div>
+
+      <!-- ── Logged-in: profile card ── -->
+      <div id="auth-logged-in" class="card hidden" style="max-width:460px">
+        <div class="card-label">Account</div>
+        <div class="auth-user-info">
+          <div class="auth-avatar" id="auth-avatar"></div>
+          <div>
+            <div style="font-weight:700;font-size:14px" id="auth-email-display"></div>
+            <div class="text-sm text-muted">Signed in</div>
+          </div>
+        </div>
+        <div class="info-block" style="margin-bottom:16px">
+          Your roadmap history is automatically saved each time you generate a roadmap.
+        </div>
+        <button class="btn btn-ghost" onclick="doLogout()">Sign Out</button>
+      </div>
+
+      <!-- ── Roadmap history (logged-in only) ── -->
+      <div id="auth-history-card" class="card hidden">
+        <div class="row-between" style="margin-bottom:14px">
+          <div class="card-label" style="margin-bottom:0">Roadmap History</div>
+          <button class="btn btn-ghost" style="font-size:11px;padding:5px 12px" onclick="loadHistory()">Refresh</button>
+        </div>
+        <div id="auth-history-list">
+          <span class="text-sm text-muted">Loading…</span>
+        </div>
+      </div>
+
+    </div><!-- /page-auth -->
+
   </main>
 </div>
 
@@ -1020,6 +1156,9 @@ const state = {
   graphData:        null, // POST /graph-data response
   readinessResult:  null, // POST /readiness response
   studyPlanResult:  null, // POST /study-plan response
+  // Auth (Phase 3)
+  token:            null, // JWT from login / register
+  userEmail:        null, // email of the signed-in user
 };
 
 // ── Skill descriptions (83 skills) ──────────────────────────
@@ -1131,6 +1270,7 @@ const PAGE_META = {
   extract: { step: 'Step 1 of 3', title: 'Paste your resume or project description' },
   skills:  { step: 'Step 2 of 3', title: 'Review detected skills and choose a target role' },
   roadmap: { step: 'Step 3 of 3', title: 'Your personalised learning roadmap' },
+  auth:    { step: 'Account',     title: 'Sign in to save your roadmap history' },
 };
 
 // ════════════════════════════════════════════════════════════
@@ -1146,6 +1286,14 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('char-count').textContent =
       `${ta.value.length.toLocaleString()} characters`;
   });
+  // Restore auth session from localStorage
+  const savedToken = localStorage.getItem('ca_token');
+  const savedEmail = localStorage.getItem('ca_email');
+  if (savedToken && savedEmail) {
+    state.token     = savedToken;
+    state.userEmail = savedEmail;
+    updateAuthUI();
+  }
 });
 
 // Ping GET /health — updates the status pill in the top bar
@@ -1194,7 +1342,7 @@ async function fetchGraphStats() {
 // ════════════════════════════════════════════════════════════
 
 function showPage(name) {
-  ['extract', 'skills', 'roadmap'].forEach(p => {
+  ['extract', 'skills', 'roadmap', 'auth'].forEach(p => {
     document.getElementById(`page-${p}`).classList.add('hidden');
     document.getElementById(`nav-${p}`).classList.remove('active');
   });
@@ -1202,6 +1350,7 @@ function showPage(name) {
   document.getElementById(`nav-${name}`).classList.add('active');
   document.getElementById('topbar-step').textContent  = PAGE_META[name].step;
   document.getElementById('topbar-title').textContent = PAGE_META[name].title;
+  if (name === 'auth') renderAuthPage();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -2177,18 +2326,171 @@ function downloadReport() {
 
 // Typed fetch helpers — reduce repetition in API calls
 async function fetchJSON(url) {
-  const r = await fetch(url);
+  const headers = {};
+  if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+  const r = await fetch(url, { headers });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
 async function postJSON(url, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
   const r = await fetch(url, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(body),
+    method: 'POST',
+    headers,
+    body:   JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
+}
+
+// ════════════════════════════════════════════════════════════
+// AUTH — LOGIN / REGISTER / LOGOUT
+// ════════════════════════════════════════════════════════════
+
+// Render the auth page based on whether the user is logged in
+function renderAuthPage() {
+  const loggedIn  = !!state.token;
+  document.getElementById('auth-logged-out').classList.toggle('hidden', loggedIn);
+  document.getElementById('auth-logged-in').classList.toggle('hidden', !loggedIn);
+  document.getElementById('auth-history-card').classList.toggle('hidden', !loggedIn);
+  if (loggedIn) {
+    const email   = state.userEmail || '';
+    document.getElementById('auth-email-display').textContent = email;
+    document.getElementById('auth-avatar').textContent        = email[0]?.toUpperCase() || '?';
+    loadHistory();
+  }
+}
+
+// Toggle between Sign In and Create Account tabs
+function switchAuthTab(tab) {
+  document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+  document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+  document.getElementById('panel-login').classList.toggle('hidden', tab !== 'login');
+  document.getElementById('panel-register').classList.toggle('hidden', tab !== 'register');
+  document.getElementById('login-error').textContent = '';
+  document.getElementById('reg-error').textContent   = '';
+}
+
+async function doLogin() {
+  const email    = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl    = document.getElementById('login-error');
+  const btn      = document.getElementById('login-btn');
+  errEl.textContent = '';
+  if (!email || !password) { errEl.textContent = 'Please enter email and password.'; return; }
+
+  btn.innerHTML = '<span class="spinner"></span> Signing in…';
+  btn.disabled  = true;
+  try {
+    const data = await fetch(`${API}/auth/login`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ email, password }),
+    });
+    if (data.status === 401) { errEl.textContent = 'Incorrect email or password.'; return; }
+    if (!data.ok) { errEl.textContent = `Error ${data.status} — please try again.`; return; }
+    const json = await data.json();
+    setAuthSession(email, json.access_token);
+    toast(`Signed in as ${email}`);
+    renderAuthPage();
+  } catch {
+    errEl.textContent = 'Network error — is the API running?';
+  } finally {
+    btn.innerHTML = 'Sign In';
+    btn.disabled  = false;
+  }
+}
+
+async function doRegister() {
+  const email    = document.getElementById('reg-email').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const errEl    = document.getElementById('reg-error');
+  const btn      = document.getElementById('reg-btn');
+  errEl.textContent = '';
+  if (!email || !password) { errEl.textContent = 'Please enter email and password.'; return; }
+  if (password.length < 8)  { errEl.textContent = 'Password must be at least 8 characters.'; return; }
+
+  btn.innerHTML = '<span class="spinner"></span> Creating account…';
+  btn.disabled  = true;
+  try {
+    const data = await fetch(`${API}/auth/register`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ email, password }),
+    });
+    if (data.status === 409) { errEl.textContent = 'An account with that email already exists.'; return; }
+    if (!data.ok) { errEl.textContent = `Error ${data.status} — please try again.`; return; }
+    const json = await data.json();
+    setAuthSession(email, json.access_token);
+    toast(`Account created! Signed in as ${email}`);
+    renderAuthPage();
+  } catch {
+    errEl.textContent = 'Network error — is the API running?';
+  } finally {
+    btn.innerHTML = 'Create Account';
+    btn.disabled  = false;
+  }
+}
+
+function doLogout() {
+  state.token     = null;
+  state.userEmail = null;
+  localStorage.removeItem('ca_token');
+  localStorage.removeItem('ca_email');
+  updateAuthUI();
+  renderAuthPage();
+  toast('Signed out');
+}
+
+// Persist session and update the sidebar/topbar indicators
+function setAuthSession(email, token) {
+  state.token     = token;
+  state.userEmail = email;
+  localStorage.setItem('ca_token', token);
+  localStorage.setItem('ca_email', email);
+  updateAuthUI();
+}
+
+// Update sidebar nav label and topbar pill to reflect auth state
+function updateAuthUI() {
+  const emailEl = document.getElementById('nav-auth-email');
+  if (state.token && state.userEmail) {
+    emailEl.textContent = state.userEmail;
+    emailEl.classList.remove('hidden');
+  } else {
+    emailEl.classList.add('hidden');
+  }
+}
+
+// Load and render roadmap history for the signed-in user
+async function loadHistory() {
+  const container = document.getElementById('auth-history-list');
+  container.innerHTML = '<span class="text-sm text-muted">Loading…</span>';
+  try {
+    const rows = await fetchJSON(`${API}/users/history?limit=20`);
+    if (!rows.length) {
+      container.innerHTML = '<span class="text-sm text-muted">No history yet — generate a roadmap to save your first entry.</span>';
+      return;
+    }
+    container.innerHTML = rows.map(r => {
+      const score  = r.readiness_score != null ? Math.round(r.readiness_score) : null;
+      const cls    = score == null ? '' : score >= 60 ? '' : score >= 35 ? 'mid' : 'low';
+      const date   = new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      const known  = (r.known_skills  || []).length;
+      const missing= (r.missing_skills|| []).length;
+      return `
+        <div class="history-row">
+          <div>
+            <div class="history-role">${r.role}</div>
+            <div class="history-meta">${date} · ${known} known · ${missing} missing</div>
+          </div>
+          ${score != null ? `<div class="history-score ${cls}">${score}</div>` : ''}
+        </div>`;
+    }).join('');
+  } catch {
+    container.innerHTML = '<span class="text-sm text-muted">Failed to load history.</span>';
+  }
 }
 
 // Toast notification
