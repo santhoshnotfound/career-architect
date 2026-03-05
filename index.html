@@ -601,6 +601,49 @@
     ───────────────────────────────────────────────────────── */
     .info-block { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
     .info-block b { color: var(--text); font-weight: 600; }
+
+    /* ─────────────────────────────────────────────────────────
+       AUTH MODAL
+    ───────────────────────────────────────────────────────── */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.45);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1000;
+    }
+    .modal-overlay.hidden { display: none !important; }
+    .modal-box {
+      position: relative;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 28px 24px;
+      width: 360px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.14);
+    }
+    .modal-title { font-size: 16px; font-weight: 700; margin-bottom: 18px; }
+    .modal-field { margin-bottom: 14px; }
+    .modal-field label { display: block; font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
+    .modal-input {
+      width: 100%; padding: 9px 12px;
+      border: 1px solid var(--border); border-radius: 7px;
+      font-family: var(--font); font-size: 13.5px;
+      background: var(--bg); color: var(--text); outline: none;
+    }
+    .modal-input:focus { border-color: #71717a; }
+    .modal-actions { display: flex; gap: 8px; margin-top: 6px; }
+    .modal-close {
+      position: absolute; top: 10px; right: 12px;
+      background: none; border: none;
+      font-size: 16px; color: var(--muted);
+      cursor: pointer; padding: 4px 6px;
+      border-radius: 4px; line-height: 1;
+    }
+    .modal-close:hover { background: var(--bg); color: var(--text); }
+    .modal-error { font-size: 12px; color: var(--missing); margin-top: 8px; min-height: 16px; }
+    .user-chip { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+    .user-chip b { color: var(--text); font-weight: 600; }
+    .btn-sm { padding: 5px 12px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -640,9 +683,16 @@
       <div class="topbar-step" id="topbar-step">Step 1 of 3</div>
       <div class="topbar-title" id="topbar-title">Paste your resume or project description</div>
     </div>
-    <div class="api-pill">
-      <div class="api-dot" id="api-dot"></div>
-      <span id="api-label">connecting…</span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div id="user-status" class="user-chip hidden">
+        Logged in as <b id="user-email"></b>
+        <button class="btn btn-ghost btn-sm" onclick="logout()">Logout</button>
+      </div>
+      <button id="login-btn" class="btn btn-ghost btn-sm" onclick="showAuthModal()">Login / Register</button>
+      <div class="api-pill">
+        <div class="api-dot" id="api-dot"></div>
+        <span id="api-label">connecting…</span>
+      </div>
     </div>
   </header>
 
@@ -973,6 +1023,27 @@ reading NLP papers and learning about transformer architectures independently.">
   </main>
 </div>
 
+<!-- ════ AUTH MODAL ════ -->
+<div id="auth-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <button class="modal-close" onclick="hideAuthModal()">✕</button>
+    <div class="modal-title">Account</div>
+    <div class="modal-field">
+      <label>Email</label>
+      <input id="auth-email" type="email" class="modal-input" placeholder="you@example.com" autocomplete="email" />
+    </div>
+    <div class="modal-field">
+      <label>Password</label>
+      <input id="auth-password" type="password" class="modal-input" placeholder="••••••••" autocomplete="current-password" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="authLogin()">Login</button>
+      <button class="btn btn-ghost" onclick="authRegister()">Register</button>
+    </div>
+    <div id="auth-error" class="modal-error"></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1140,6 +1211,7 @@ const PAGE_META = {
 document.addEventListener('DOMContentLoaded', () => {
   pingAPI();
   fetchGraphStats();
+  initAuth();
   // Character counter on the resume textarea
   const ta = document.getElementById('resume-input');
   ta.addEventListener('input', () => {
@@ -2182,13 +2254,106 @@ async function fetchJSON(url) {
   return r.json();
 }
 async function postJSON(url, body) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = localStorage.getItem('token');
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const r = await fetch(url, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body:    JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
+}
+
+// ════════════════════════════════════════════════════════════
+// AUTH
+// ════════════════════════════════════════════════════════════
+
+async function initAuth() {
+  const token = localStorage.getItem('token');
+  if (!token) return;
+  try {
+    const r = await fetch(`${API}/users/me`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!r.ok) { localStorage.removeItem('token'); return; }
+    const user = await r.json();
+    showUserStatus(user.email);
+  } catch {
+    // Silently ignore — API may be offline
+  }
+}
+
+function showUserStatus(email) {
+  document.getElementById('user-email').textContent = email;
+  document.getElementById('user-status').classList.remove('hidden');
+  document.getElementById('login-btn').classList.add('hidden');
+}
+
+function showAuthModal() {
+  document.getElementById('auth-modal').classList.remove('hidden');
+  document.getElementById('auth-error').textContent = '';
+  document.getElementById('auth-email').focus();
+}
+
+function hideAuthModal() {
+  document.getElementById('auth-modal').classList.add('hidden');
+}
+
+async function authLogin() {
+  const email    = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  if (!email || !password) { setAuthError('Enter email and password'); return; }
+  try {
+    const r = await fetch(`${API}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    if (r.status === 401) { setAuthError('Invalid email or password'); return; }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    localStorage.setItem('token', data.access_token);
+    showUserStatus(email);
+    hideAuthModal();
+    toast('Logged in!');
+  } catch (err) {
+    setAuthError('Login failed — try again');
+    console.error(err);
+  }
+}
+
+async function authRegister() {
+  const email    = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  if (!email || !password) { setAuthError('Enter email and password'); return; }
+  try {
+    const r = await fetch(`${API}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    if (r.status === 409) { setAuthError('Email already registered — try logging in'); return; }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    localStorage.setItem('token', data.access_token);
+    showUserStatus(email);
+    hideAuthModal();
+    toast('Account created!');
+  } catch (err) {
+    setAuthError('Registration failed — try again');
+    console.error(err);
+  }
+}
+
+function logout() {
+  localStorage.removeItem('token');
+  location.reload();
+}
+
+function setAuthError(msg) {
+  document.getElementById('auth-error').textContent = msg;
 }
 
 // Toast notification
