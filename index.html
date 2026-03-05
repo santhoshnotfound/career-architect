@@ -1701,9 +1701,9 @@ const MEDIUM_SKILL_SIZE = new Set([
   'System Design', 'MLOps', 'Reinforcement Learning',
 ]);
 function nodeSize(label) {
-  if (CORE_SKILL_SIZE.has(label))   return 58;
-  if (MEDIUM_SKILL_SIZE.has(label)) return 42;
-  return 30;
+  if (CORE_SKILL_SIZE.has(label))   return 62;
+  if (MEDIUM_SKILL_SIZE.has(label)) return 46;
+  return 36;
 }
 
 // ── Entry point ────────────────────────────────────────────────
@@ -1757,16 +1757,15 @@ function renderCytoscapeGraph() {
     style: buildCytoscapeStyle(),
     layout: {
       name:               'cose',
-      animate:            true,
-      animationDuration:  900,
-      randomize:          true,
-      nodeRepulsion:      () => 10000,
-      idealEdgeLength:    () => 115,
+      animate:            false,   // run synchronously so nodes appear immediately
+      randomize:          false,
+      nodeRepulsion:      () => 12000,
+      idealEdgeLength:    () => 120,
       edgeElasticity:     () => 80,
-      gravity:            0.55,
-      numIter:            900,
+      gravity:            0.5,
+      numIter:            1000,
       fit:                true,
-      padding:            50,
+      padding:            40,
       nodeDimensionsIncludeLabels: true,
     },
     minZoom: 0.1,
@@ -1786,14 +1785,8 @@ function renderCytoscapeGraph() {
   cy.on('mouseover', 'node', evt => evt.target.addClass('hovered'));
   cy.on('mouseout',  'node', evt => evt.target.removeClass('hovered'));
 
-  // Fade nodes in after layout; then animate path
-  cy.on('layoutstop', () => {
-    cy.nodes().animate(
-      { style: { opacity: 1 } },
-      { duration: 450, easing: 'ease-in-out-cubic' }
-    );
-    setTimeout(animateRoadmapPath, 650);
-  });
+  // Animate roadmap path after graph renders
+  setTimeout(animateRoadmapPath, 300);
 
   // Fade out hint
   const hint = document.getElementById('graph-hint');
@@ -1818,24 +1811,23 @@ function buildCytoscapeStyle() {
         'text-valign':       'center',
         'text-halign':       'center',
         'font-family':       'JetBrains Mono, monospace',
-        'font-size':         '8px',
-        'font-weight':       '600',
+        'font-size':         '9px',
+        'font-weight':       '700',
         'color':             '#fff',
         'text-wrap':         'wrap',
-        'text-max-width':    '54px',
-        'background-color':  '#a1a1aa',
+        'text-max-width':    '58px',
+        'background-color':  '#64748b',
         'border-width':      2.5,
         'border-color':      'transparent',
-        'opacity':           0,   // fades in after layoutstop
-        'transition-property':  'opacity, background-color, border-color, border-width',
+        'transition-property':  'background-color, border-color, border-width',
         'transition-duration':  '0.22s',
       },
     },
     // Status fills
     { selector: 'node[status = "known"]',   style: { 'background-color': '#16a34a', 'color': '#fff' } },
     { selector: 'node[status = "next"]',    style: { 'background-color': '#2563eb', 'color': '#fff' } },
-    { selector: 'node[status = "missing"]', style: { 'background-color': '#52525b', 'color': '#d4d4d8' } },
-    { selector: 'node[status = "neutral"]', style: { 'background-color': '#e4e3de', 'color': '#71717a' } },
+    { selector: 'node[status = "missing"]', style: { 'background-color': '#4b5563', 'color': '#e5e7eb' } },
+    { selector: 'node[status = "neutral"]', style: { 'background-color': '#374151', 'color': '#9ca3af' } },
     // Roadmap path nodes — purple (overrides missing/next, not known)
     {
       selector: 'node[?isPath][status != "known"]',
