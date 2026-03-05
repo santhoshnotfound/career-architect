@@ -9,8 +9,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
-  <!-- D3 v7 — force simulation, drag, zoom, tooltip -->
+  <!-- D3 v7 — kept for compatibility -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+  <!-- Cytoscape.js — interactive skill graph -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
 
   <style>
     /* ── Reset ────────────────────────────────────────────────── */
@@ -603,6 +605,26 @@
     .info-block b { color: var(--text); font-weight: 600; }
 
     /* ─────────────────────────────────────────────────────────
+       GRAPH FILTER BAR
+    ───────────────────────────────────────────────────────── */
+    .graph-filter-bar {
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+      padding: 10px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    .graph-filter-btn {
+      display: inline-flex; align-items: center;
+      padding: 5px 13px; border-radius: 6px;
+      font-family: var(--font); font-size: 11.5px; font-weight: 600;
+      cursor: pointer; border: 1px solid var(--border);
+      background: var(--bg); color: var(--muted);
+      transition: all 0.14s; white-space: nowrap;
+    }
+    .graph-filter-btn:hover { border-color: var(--text); color: var(--text); }
+    .graph-filter-btn.active { background: var(--text); color: #fff; border-color: var(--text); }
+
+    /* ─────────────────────────────────────────────────────────
        AUTH FORMS
     ───────────────────────────────────────────────────────── */
     .auth-input {
@@ -893,7 +915,15 @@ reading NLP papers and learning about transformer architectures independently.">
         </div>
         <!-- Graph wrapper: position:relative so tooltip/controls anchor correctly -->
         <div id="graph-wrap">
-          <!-- D3 mounts <svg> into this div at runtime -->
+          <!-- Filter controls -->
+          <div class="graph-filter-bar">
+            <button class="graph-filter-btn active" data-filter="full"    onclick="setGraphFilter('full')">Full Graph</button>
+            <button class="graph-filter-btn"        data-filter="roadmap" onclick="setGraphFilter('roadmap')">Roadmap Path</button>
+            <button class="graph-filter-btn"        data-filter="missing" onclick="setGraphFilter('missing')">Missing Skills</button>
+            <div style="flex:1"></div>
+            <button class="graph-filter-btn" onclick="graphReset()">⊙ Fit View</button>
+          </div>
+          <!-- Cytoscape mounts into this div -->
           <div id="graph-canvas"></div>
 
           <!-- Detail panel — shown when a node is clicked -->
@@ -925,9 +955,10 @@ reading NLP papers and learning about transformer architectures independently.">
         </div>
         <div class="row-between mt-3">
           <div class="legend">
-            <div class="legend-item"><div class="legend-dot" style="background:var(--known)"></div>You have this</div>
-            <div class="legend-item"><div class="legend-dot" style="background:var(--next)"></div>Learn next</div>
-            <div class="legend-item"><div class="legend-dot" style="background:var(--missing)"></div>Skill gap</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#16a34a"></div>You have this</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#2563eb"></div>Learn next</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#52525b"></div>Locked (gap)</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#7c3aed"></div>Roadmap path</div>
             <div class="legend-item"><div class="legend-dot" style="background:#e4e3de"></div>Not required</div>
           </div>
           <div class="legend">
@@ -1631,7 +1662,7 @@ async function runRoadmap() {
 
 function renderRoadmapPage() {
   document.getElementById('graph-role-label').textContent = `Role: ${state.targetRole}`;
-  renderD3Graph();
+  renderCytoscapeGraph();
   renderRoadmapSteps();
   renderSummary();
   renderReadinessGauge();
@@ -1639,378 +1670,326 @@ function renderRoadmapPage() {
 }
 
 // ════════════════════════════════════════════════════════════
-// D3 v7 FORCE-DIRECTED GRAPH
+// CYTOSCAPE.JS INTERACTIVE SKILL MAP
 // ════════════════════════════════════════════════════════════
 //
-// ARCHITECTURE
-//   renderD3Graph()   — builds the entire SVG from scratch each
-//                       time the roadmap page loads. Tears down
-//                       any previous simulation cleanly.
-//   showTooltip(d)    — populates and reveals the detail panel
-//                       when a node is clicked.
-//   hideTooltip()     — clears panel, resets edge highlight
-//   graphZoomIn/Out/Reset() — wired to the +/−/⊙ buttons
+// Entry point: renderCytoscapeGraph()  — replaces the old D3 graph.
 //
-// WHY FORCE SIMULATION?
-//   Backend sends domain-clustered seed positions. We run a
-//   brief simulation (alphaDecay=0.05, settles in ~1.5s) so
-//   overlapping nodes spread apart while staying near their
-//   cluster. After that the graph is static until dragged.
-//
-// DRAG: pins node with fx/fy while dragging, releases on end.
-// ZOOM: D3 zoom on <svg>, transforms the inner <g>.
-// CLICK: sets 'selected' class, highlights incident edges.
+// Features:
+//   - Node color by status (known=green / next=blue / locked=grey / neutral)
+//   - Node size by importance (core / domain / tool)
+//   - Domain accent border ring (Programming=blue, Math=violet, etc.)
+//   - Roadmap path nodes/edges highlighted in purple with animation
+//   - Click to select + neighborhood highlight + detail tooltip
+//   - Filter controls: Full / Roadmap Path / Missing Skills
+//   - Smooth pan + zoom; Fit View button
+//   - Fade-in animation after layout settles
 // ════════════════════════════════════════════════════════════
 
-// Module-level handles so external controls can call in
-const d3Graph = {
-  svg:          null,
-  zoom:         null,
-  rootG:        null,
-  simulation:   null,
-  nodeSel:      null,
-  edgeSel:      null,
-  edgeData:     null,   // raw edge array after forceLink resolves
-};
+let cy = null; // Global Cytoscape instance
 
-// ── Entry point ───────────────────────────────────────────────
-function renderD3Graph() {
+// Node importance → pixel size
+const CORE_SKILL_SIZE = new Set([
+  'Python', 'Linear Algebra', 'Statistics', 'Machine Learning',
+  'JavaScript', 'Git', 'Databases', 'Data Science', 'Deep Learning',
+  'Probability', 'Calculus',
+]);
+const MEDIUM_SKILL_SIZE = new Set([
+  'PyTorch', 'NLP', 'Computer Vision', 'React', 'TypeScript',
+  'Docker', 'Backend Development', 'Algorithms', 'Data Structures',
+  'SQL Advanced', 'Data Engineering', 'Apache Spark', 'Cloud Platforms',
+  'System Design', 'MLOps', 'Reinforcement Learning',
+]);
+function nodeSize(label) {
+  if (CORE_SKILL_SIZE.has(label))   return 58;
+  if (MEDIUM_SKILL_SIZE.has(label)) return 42;
+  return 30;
+}
+
+// ── Entry point ────────────────────────────────────────────────
+function renderCytoscapeGraph() {
   const container = document.getElementById('graph-canvas');
   container.innerHTML = '';
-
-  // Kill any previous simulation
-  if (d3Graph.simulation) {
-    d3Graph.simulation.stop();
-    d3Graph.simulation = null;
-  }
-
-  const W = container.clientWidth  || 860;
-  const H = container.clientHeight || 500;
-  const R = 19;  // node radius
+  if (cy) { cy.destroy(); cy = null; }
 
   const { nodes: rawNodes, edges: rawEdges } = state.graphData;
   if (!rawNodes || rawNodes.length === 0) return;
 
-  // Deep-copy: D3 mutates x/y/vx/vy on the objects it receives
-  const nodes = rawNodes.map(n => ({ ...n }));
-  const edges = rawEdges.map(e => ({ ...e }));
-
-  // ── Map backend coordinates to pixel space ────────────────────
-  const xs   = rawNodes.map(n => n.x);
-  const ys   = rawNodes.map(n => n.y);
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const minY = Math.min(...ys), maxY = Math.max(...ys);
-  const pad  = 80;
-  const scaleX = v => pad + (v - minX) / ((maxX - minX) || 1) * (W - pad * 2);
-  const scaleY = v => pad + (v - minY) / ((maxY - minY) || 1) * (H - pad * 2);
-
-  // Set initial pixel positions (simulation starts here)
-  const seedX = {};
-  const seedY = {};
-  rawNodes.forEach(n => { seedX[n.id] = scaleX(n.x); seedY[n.id] = scaleY(n.y); });
-  nodes.forEach(n => { n.x = seedX[n.id]; n.y = seedY[n.id]; });
-
-  // ── Build SVG ─────────────────────────────────────────────────
-  const svg = d3.select(container)
-    .append('svg')
-    .attr('width',  W)
-    .attr('height', H);
-
-  // Arrow marker for directed edges
-  const defs = svg.append('defs');
-  defs.append('marker')
-    .attr('id',          'd3arr')
-    .attr('viewBox',     '0 0 10 10')
-    .attr('refX',        9)
-    .attr('refY',        5)
-    .attr('markerWidth',  6)
-    .attr('markerHeight', 6)
-    .attr('orient',      'auto-start-reverse')
-    .append('path')
-      .attr('d',    'M 0 0 L 10 5 L 0 10 z')
-      .attr('fill', '#c8c8c8');
-
-  // ── Zoom ──────────────────────────────────────────────────────
-  const zoomBehavior = d3.zoom()
-    .scaleExtent([0.2, 4])
-    .on('zoom', ev => rootG.attr('transform', ev.transform));
-
-  svg.call(zoomBehavior)
-     .on('click', () => hideTooltip());   // click background = close panel
-
-  // Root group — everything lives inside here so zoom works
-  const rootG = svg.append('g').attr('class', 'root-g');
-
-  // Store handles
-  d3Graph.svg  = svg;
-  d3Graph.zoom = zoomBehavior;
-  d3Graph.rootG = rootG;
-
-  // ── Edges ─────────────────────────────────────────────────────
-  const edgeG = rootG.append('g').attr('class', 'edge-layer');
-
-  const edgeSel = edgeG.selectAll('line.d3-edge')
-    .data(edges)
-    .enter().append('line')
-      .attr('class',      'd3-edge')
-      .attr('marker-end', 'url(#d3arr)');
-
-  d3Graph.edgeSel  = edgeSel;
-  d3Graph.edgeData = edges;
-
-  // ── Nodes ─────────────────────────────────────────────────────
-  const nodeG = rootG.append('g').attr('class', 'node-layer');
-
-  const nodeSel = nodeG.selectAll('g.d3-node')
-    .data(nodes, d => d.id)
-    .enter().append('g')
-      .attr('class', 'd3-node')
-      .attr('transform', d => `translate(${d.x},${d.y})`)
-      .call(
-        d3.drag()
-          .on('start', onDragStart)
-          .on('drag',  onDrag)
-          .on('end',   onDragEnd)
-      )
-      .on('click', function(event, d) {
-        event.stopPropagation();
-        showTooltip(d, this);
-      });
-
-  d3Graph.nodeSel = nodeSel;
-
-  // Domain glow ring — only for non-neutral nodes
-  nodeSel.filter(d => d.status !== 'neutral')
-    .append('circle')
-      .attr('class', 'glow-ring')
-      .attr('r',            R + 7)
-      .attr('fill',         'none')
-      .attr('stroke',       d => DOMAIN_COLOR[d.domain] || '#a1a1aa')
-      .attr('stroke-width', 1.4)
-      .attr('opacity',      0.25);
-
-  // Main filled circle — carries the class 'main-circle' for reset targeting
-  nodeSel.append('circle')
-    .attr('class',        'main-circle')
-    .attr('r',             R)
-    .attr('fill',          d => NODE_FILL[d.status]   || '#f4f4f5')
-    .attr('stroke',        d => d.status === 'neutral' ? '#d1d5db' : 'none')
-    .attr('stroke-width',  1.2);
-
-  // Labels — 1 or 2 lines depending on label length
-  nodeSel.each(function(d) {
-    const g    = d3.select(this);
-    const col  = NODE_TEXT[d.status] || '#9ca3af';
-    const words = d.label.split(' ');
-    const clip  = s => s.length > 11 ? s.slice(0, 10) + '…' : s;
-
-    if (words.length === 1 || d.label.length <= 9) {
-      g.append('text')
-        .attr('class',       'node-label')
-        .attr('text-anchor', 'middle')
-        .attr('dy',          '0.36em')
-        .attr('font-size',   d.label.length > 8 ? 7 : 8)
-        .attr('font-weight', 600)
-        .attr('fill',        col)
-        .attr('font-family', 'JetBrains Mono, monospace')
-        .text(clip(d.label));
-    } else {
-      const mid = Math.ceil(words.length / 2);
-      const l1  = words.slice(0, mid).join(' ');
-      const l2  = words.slice(mid).join(' ');
-      g.append('text')
-        .attr('class','node-label').attr('text-anchor','middle')
-        .attr('dy', '-0.35em').attr('font-size', 7).attr('font-weight', 600)
-        .attr('fill', col).attr('font-family', 'JetBrains Mono, monospace')
-        .text(clip(l1));
-      g.append('text')
-        .attr('class','node-label').attr('text-anchor','middle')
-        .attr('dy', '0.75em').attr('font-size', 7).attr('font-weight', 600)
-        .attr('fill', col).attr('font-family', 'JetBrains Mono, monospace')
-        .text(clip(l2));
-    }
+  // Build path skill set and path edge IDs from learning_paths
+  const roadmapPaths = state.roadmapResult?.learning_paths || {};
+  const pathSkillSet = new Set();
+  const pathEdgeSet  = new Set();
+  Object.values(roadmapPaths).forEach(path => {
+    path.forEach((skill, i) => {
+      pathSkillSet.add(skill);
+      if (i > 0) pathEdgeSet.add(`${path[i - 1]}||${skill}`);
+    });
   });
 
-  // ── Force simulation ──────────────────────────────────────────
-  const sim = d3.forceSimulation(nodes)
-    .alpha(0.4).alphaDecay(0.05)  // settles in ~1.5s
-    .force('link',
-      d3.forceLink(edges).id(d => d.id).distance(88).strength(0.25))
-    .force('charge',
-      d3.forceManyBody().strength(-180))
-    .force('collide',
-      d3.forceCollide(R + 9).strength(0.9))
-    // Soft pull toward domain cluster seed positions
-    .force('sx', d3.forceX(d => seedX[d.id]).strength(0.1))
-    .force('sy', d3.forceY(d => seedY[d.id]).strength(0.1))
-    .on('tick', tick);
-
-  d3Graph.simulation = sim;
-
-  // ── Tick: update positions ────────────────────────────────────
-  function tick() {
-    // Clamp nodes inside canvas
-    nodes.forEach(d => {
-      d.x = Math.max(R + 2, Math.min(W - R - 2, d.x));
-      d.y = Math.max(R + 2, Math.min(H - R - 2, d.y));
+  // Build Cytoscape elements
+  const elements = [];
+  rawNodes.forEach(n => {
+    elements.push({
+      group: 'nodes',
+      data: {
+        id:     n.id,
+        label:  n.label || n.id,
+        status: n.status  || 'neutral',
+        domain: n.domain  || 'programming',
+        size:   nodeSize(n.label || n.id),
+        isPath: pathSkillSet.has(n.id),
+      },
     });
+  });
+  rawEdges.forEach(e => {
+    const src = typeof e.source === 'object' ? e.source.id : e.source;
+    const tgt = typeof e.target === 'object' ? e.target.id : e.target;
+    const eid = `${src}||${tgt}`;
+    elements.push({
+      group: 'edges',
+      data: { id: eid, source: src, target: tgt, isPath: pathEdgeSet.has(eid) },
+    });
+  });
 
-    // Move edges (shorten line so arrow tip touches node edge, not center)
-    edgeSel
-      .attr('x1', d => d.source.x)
-      .attr('y1', d => d.source.y)
-      .attr('x2', d => {
-        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
-        const l  = Math.hypot(dx, dy) || 1;
-        return d.target.x - (dx / l) * (R + 5);
-      })
-      .attr('y2', d => {
-        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
-        const l  = Math.hypot(dx, dy) || 1;
-        return d.target.y - (dy / l) * (R + 5);
-      });
+  cy = cytoscape({
+    container,
+    elements,
+    style: buildCytoscapeStyle(),
+    layout: {
+      name:               'cose',
+      animate:            true,
+      animationDuration:  900,
+      randomize:          true,
+      nodeRepulsion:      () => 10000,
+      idealEdgeLength:    () => 115,
+      edgeElasticity:     () => 80,
+      gravity:            0.55,
+      numIter:            900,
+      fit:                true,
+      padding:            50,
+      nodeDimensionsIncludeLabels: true,
+    },
+    minZoom: 0.1,
+    maxZoom: 4,
+  });
 
-    // Move node groups
-    nodeSel.attr('transform', d => `translate(${d.x.toFixed(1)},${d.y.toFixed(1)})`);
-  }
+  // Node click → select + highlight neighbourhood
+  cy.on('tap', 'node', function(evt) {
+    evt.stopPropagation();
+    showTooltip(evt.target);
+  });
+  // Background click → clear
+  cy.on('tap', function(evt) {
+    if (evt.target === cy) hideTooltip();
+  });
+  // Hover glow
+  cy.on('mouseover', 'node', evt => evt.target.addClass('hovered'));
+  cy.on('mouseout',  'node', evt => evt.target.removeClass('hovered'));
 
-  // ── Drag handlers ─────────────────────────────────────────────
-  function onDragStart(event, d) {
-    if (!event.active) sim.alphaTarget(0.15).restart();
-    d.fx = d.x;  d.fy = d.y;
-    d3.select(this).classed('dragging', true);
-  }
-  function onDrag(event, d) {
-    d.fx = event.x;  d.fy = event.y;
-  }
-  function onDragEnd(event, d) {
-    if (!event.active) sim.alphaTarget(0);
-    d.fx = null;  d.fy = null;
-    d3.select(this).classed('dragging', false);
-  }
+  // Fade nodes in after layout; then animate path
+  cy.on('layoutstop', () => {
+    cy.nodes().animate(
+      { style: { opacity: 1 } },
+      { duration: 450, easing: 'ease-in-out-cubic' }
+    );
+    setTimeout(animateRoadmapPath, 650);
+  });
 
-  // ── Fade out hint after 4s ────────────────────────────────────
+  // Fade out hint
   const hint = document.getElementById('graph-hint');
   if (hint) setTimeout(() => hint.classList.add('fade'), 4000);
+
+  // Reset filter buttons to "Full Graph"
+  document.querySelectorAll('.graph-filter-btn[data-filter]').forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === 'full');
+  });
 }
 
-// ── Node detail panel ─────────────────────────────────────────
-// Opened on node click. Shows domain, name, status, description,
-// prerequisites and skills this node unlocks.
-function showTooltip(d, nodeEl) {
-  const edges = d3Graph.edgeData || [];
+// ── Cytoscape stylesheet ────────────────────────────────────────
+function buildCytoscapeStyle() {
+  return [
+    // Base node
+    {
+      selector: 'node',
+      style: {
+        'width':             'data(size)',
+        'height':            'data(size)',
+        'label':             'data(label)',
+        'text-valign':       'center',
+        'text-halign':       'center',
+        'font-family':       'JetBrains Mono, monospace',
+        'font-size':         '8px',
+        'font-weight':       '600',
+        'color':             '#fff',
+        'text-wrap':         'wrap',
+        'text-max-width':    '54px',
+        'background-color':  '#a1a1aa',
+        'border-width':      2.5,
+        'border-color':      'transparent',
+        'opacity':           0,   // fades in after layoutstop
+        'transition-property':  'opacity, background-color, border-color, border-width',
+        'transition-duration':  '0.22s',
+      },
+    },
+    // Status fills
+    { selector: 'node[status = "known"]',   style: { 'background-color': '#16a34a', 'color': '#fff' } },
+    { selector: 'node[status = "next"]',    style: { 'background-color': '#2563eb', 'color': '#fff' } },
+    { selector: 'node[status = "missing"]', style: { 'background-color': '#52525b', 'color': '#d4d4d8' } },
+    { selector: 'node[status = "neutral"]', style: { 'background-color': '#e4e3de', 'color': '#71717a' } },
+    // Roadmap path nodes — purple (overrides missing/next, not known)
+    {
+      selector: 'node[?isPath][status != "known"]',
+      style: { 'background-color': '#7c3aed', 'color': '#fff', 'border-color': '#a78bfa', 'border-width': 3 },
+    },
+    // Domain accent border rings
+    { selector: 'node[domain = "programming"]', style: { 'border-color': '#3b82f6' } },
+    { selector: 'node[domain = "math"]',        style: { 'border-color': '#7c3aed' } },
+    { selector: 'node[domain = "ml"]',          style: { 'border-color': '#db2777' } },
+    { selector: 'node[domain = "engineering"]', style: { 'border-color': '#0d9488' } },
+    { selector: 'node[domain = "web"]',         style: { 'border-color': '#f59e0b' } },
+    { selector: 'node[domain = "data"]',        style: { 'border-color': '#6366f1' } },
+    // Interaction classes
+    { selector: 'node.hovered',  style: { 'border-width': 4, 'border-opacity': 1, 'overlay-color': '#fff', 'overlay-opacity': 0.08 } },
+    { selector: 'node.selected', style: { 'border-width': 4, 'border-color': '#ffffff', 'border-opacity': 1, 'overlay-color': '#fff', 'overlay-opacity': 0.15 } },
+    { selector: 'node.dimmed',   style: { 'opacity': 0.15 } },
+    // Base edge
+    {
+      selector: 'edge',
+      style: {
+        'width':              1.4,
+        'line-color':         '#d1d5db',
+        'target-arrow-color': '#d1d5db',
+        'target-arrow-shape': 'triangle',
+        'curve-style':        'bezier',
+        'opacity':            0.65,
+        'arrow-scale':        0.75,
+      },
+    },
+    // Roadmap path edges — purple + thicker
+    {
+      selector: 'edge[?isPath]',
+      style: { 'width': 3.5, 'line-color': '#7c3aed', 'target-arrow-color': '#7c3aed', 'opacity': 1, 'arrow-scale': 1.1 },
+    },
+    // Neighbour highlight
+    { selector: 'edge.highlighted', style: { 'width': 2.5, 'line-color': '#64748b', 'target-arrow-color': '#64748b', 'opacity': 1 } },
+    { selector: 'edge.dimmed',      style: { 'opacity': 0.07 } },
+  ];
+}
 
-  // Reset any previous selection first
-  _clearSelection();
+// ── Roadmap path animation ──────────────────────────────────────
+function animateRoadmapPath() {
+  if (!cy) return;
+  const pathEdges = cy.edges('[?isPath]');
+  const pathNodes = cy.nodes('[?isPath][status != "known"]');
+  if (pathEdges.length === 0) return;
 
-  // Mark this node as selected (ring + border)
-  d3.select(nodeEl).classed('selected', true);
+  // Pulse path nodes: expand then shrink
+  pathNodes.forEach(n => {
+    const s = n.data('size');
+    n.animate({ style: { 'border-width': 5, 'width': s + 10, 'height': s + 10 } }, { duration: 360, easing: 'ease-in-out-cubic' })
+     .animate({ style: { 'border-width': 3, 'width': s,      'height': s      } }, { duration: 360, easing: 'ease-in-out-cubic' });
+  });
 
-  // Highlight incident edges; dim others
-  d3Graph.edgeSel
-    .classed('lit', e =>
-      (e.source.id || e.source) === d.id ||
-      (e.target.id || e.target) === d.id
-    );
+  // Flash path edges
+  pathEdges
+    .animate({ style: { 'width': 6, 'opacity': 1 } }, { duration: 360 })
+    .animate({ style: { 'width': 3.5, 'opacity': 1 } }, { duration: 360 });
+}
 
-  // ── Populate panel ────────────────────────────────────────────
+// ── Tooltip (reuses existing #graph-tooltip panel) ─────────────
+function showTooltip(node) {
+  if (!cy) return;
+  cy.elements().removeClass('selected dimmed highlighted');
+  node.addClass('selected');
+  const nbhd = node.closedNeighborhood();
+  cy.elements().not(nbhd).addClass('dimmed');
+  node.connectedEdges().addClass('highlighted');
+
+  const d = node.data();
   const DOMAIN_LABEL = {
     programming: 'Programming', math: 'Mathematics',
-    ml: 'ML / AI', engineering: 'Engineering',
+    ml: 'ML / AI', engineering: 'Engineering', web: 'Web', data: 'Data Engineering',
   };
-  const STATUS_LABEL = {
-    known: '✓ You have this',
-    next:  '→ Learn next',
-    missing: '✗ Skill gap',
-    neutral: 'Not required',
-  };
+  const STATUS_LABEL = { known: '✓ You have this', next: '→ Learn next', missing: '✗ Skill gap', neutral: 'Not required' };
   const STATUS_STYLE = {
-    known:   { bg:'#dcfce7', color:'#15803d' },
-    next:    { bg:'#fef3c7', color:'#92400e' },
-    missing: { bg:'#fee2e2', color:'#991b1b' },
-    neutral: { bg:'#f4f4f5', color:'#71717a' },
+    known:   { bg: '#dcfce7', color: '#15803d' },
+    next:    { bg: '#dbeafe', color: '#1e40af' },
+    missing: { bg: '#f4f4f5', color: '#52525b' },
+    neutral: { bg: '#f4f4f5', color: '#71717a' },
   };
-
   const domColor = DOMAIN_COLOR[d.domain] || '#a1a1aa';
   const st = STATUS_STYLE[d.status] || STATUS_STYLE.neutral;
 
-  // Domain badge
   const badge = document.getElementById('tt-domain-badge');
-  badge.textContent      = DOMAIN_LABEL[d.domain] || d.domain;
+  badge.textContent      = DOMAIN_LABEL[d.domain] || d.domain || '';
   badge.style.background = domColor + '22';
   badge.style.color      = domColor;
   badge.style.border     = `1px solid ${domColor}44`;
 
-  // Name
   document.getElementById('tt-name').textContent = d.label;
-
-  // Status pill
   const statusEl = document.getElementById('tt-status');
   statusEl.textContent      = STATUS_LABEL[d.status] || d.status;
   statusEl.style.background = st.bg;
   statusEl.style.color      = st.color;
-
-  // Description
   document.getElementById('tt-desc').textContent =
     SKILL_WHY[d.label] || 'A key skill on the path to your target role.';
 
-  // Prerequisites (edges → this node)
-  const prereqs = edges
-    .filter(e => (e.target.id || e.target) === d.id)
-    .map(e => e.source.id || e.source);
-
-  // Unlocks (edges from this node →)
-  const unlocks = edges
-    .filter(e => (e.source.id || e.source) === d.id)
-    .map(e => e.target.id || e.target);
-
   function setSection(sectionId, listId, items) {
+    const arr  = Array.isArray(items) ? items : items.toArray();
     const sec  = document.getElementById(sectionId);
     const list = document.getElementById(listId);
     if (!sec || !list) return;
-    if (items.length === 0) {
-      sec.classList.add('hidden');
-    } else {
-      sec.classList.remove('hidden');
-      list.innerHTML = items
-        .map(s => `<span class="tt-tag">${s}</span>`)
-        .join('');
-    }
+    if (arr.length === 0) { sec.classList.add('hidden'); return; }
+    sec.classList.remove('hidden');
+    list.innerHTML = arr.map(s => `<span class="tt-tag">${s}</span>`).join('');
   }
 
-  setSection('tt-prereqs',  'tt-prereqs-list', prereqs);
-  setSection('tt-leads-to', 'tt-leads-list',   unlocks);
-
-  // Show panel
+  setSection('tt-prereqs',  'tt-prereqs-list', node.incomers('node').map(n2 => n2.data('label')));
+  setSection('tt-leads-to', 'tt-leads-list',   node.outgoers('node').map(n2 => n2.data('label')));
   document.getElementById('graph-tooltip').classList.remove('hidden');
 }
 
 function hideTooltip() {
   document.getElementById('graph-tooltip').classList.add('hidden');
-  _clearSelection();
+  if (cy) cy.elements().removeClass('selected dimmed highlighted');
 }
 
-function _clearSelection() {
-  if (!d3Graph.rootG) return;
-  // Remove selected class from all nodes
-  d3Graph.rootG.selectAll('.d3-node').classed('selected', false);
-  // Reset all edges
-  if (d3Graph.edgeSel) d3Graph.edgeSel.classed('lit', false);
+// ── Filter controls ─────────────────────────────────────────────
+function setGraphFilter(filter) {
+  if (!cy) return;
+  cy.elements().removeClass('dimmed');
+
+  if (filter === 'roadmap') {
+    cy.nodes().forEach(n => { if (!n.data('isPath') && n.data('status') !== 'known') n.addClass('dimmed'); });
+    cy.edges().forEach(e => { if (!e.data('isPath')) e.addClass('dimmed'); });
+  } else if (filter === 'missing') {
+    cy.nodes().forEach(n => {
+      const s = n.data('status');
+      if (s !== 'missing' && s !== 'next') n.addClass('dimmed');
+    });
+    cy.edges().forEach(e => {
+      const ss = e.source().data('status'), ts = e.target().data('status');
+      if (!['missing', 'next'].includes(ss) && !['missing', 'next'].includes(ts)) e.addClass('dimmed');
+    });
+  }
+
+  document.querySelectorAll('.graph-filter-btn[data-filter]').forEach(b => {
+    b.classList.toggle('active', b.dataset.filter === filter);
+  });
 }
 
-// ── External zoom controls ─────────────────────────────────────
+// ── Zoom controls (called from HTML buttons) ────────────────────
 function graphZoomIn() {
-  if (!d3Graph.svg || !d3Graph.zoom) return;
-  d3Graph.svg.transition().duration(260).call(d3Graph.zoom.scaleBy, 1.4);
+  if (!cy) return;
+  cy.zoom({ level: cy.zoom() * 1.4, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
 }
 function graphZoomOut() {
-  if (!d3Graph.svg || !d3Graph.zoom) return;
-  d3Graph.svg.transition().duration(260).call(d3Graph.zoom.scaleBy, 0.72);
+  if (!cy) return;
+  cy.zoom({ level: cy.zoom() * 0.72, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
 }
 function graphReset() {
   hideTooltip();
-  if (!d3Graph.svg || !d3Graph.zoom) return;
-  d3Graph.svg.transition().duration(380).call(d3Graph.zoom.transform, d3.zoomIdentity);
+  if (cy) cy.animate({ fit: { eles: cy.elements(), padding: 40 } }, { duration: 350 });
 }
 
 
