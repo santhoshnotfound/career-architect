@@ -13,6 +13,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
   <!-- Cytoscape.js — interactive skill graph -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+  <!-- Cytoscape fcose — dynamic force-directed layout -->
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
 
   <style>
     /* ── Reset ────────────────────────────────────────────────── */
@@ -1756,20 +1758,23 @@ function renderCytoscapeGraph() {
     elements,
     style: buildCytoscapeStyle(),
     layout: {
-      name:               'cose',
-      animate:            false,   // run synchronously so nodes appear immediately
-      randomize:          false,
-      nodeRepulsion:      () => 12000,
-      idealEdgeLength:    () => 120,
-      edgeElasticity:     () => 80,
-      gravity:            0.5,
-      numIter:            1000,
-      fit:                true,
-      padding:            40,
-      nodeDimensionsIncludeLabels: true,
+      name:              'fcose',
+      animate:           true,
+      randomize:         true,
+      fit:               true,
+      padding:           30,
+      nodeRepulsion:     8000,
+      idealEdgeLength:   120,
+      edgeElasticity:    0.45,
+      gravity:           0.25,
+      animationDuration: 800,
+      animationEasing:   'ease-out-cubic',
     },
     minZoom: 0.1,
     maxZoom: 4,
+    userZoomingEnabled:  true,
+    userPanningEnabled:  true,
+    boxSelectionEnabled: false,
   });
 
   // Node click → select + highlight neighbourhood
@@ -1785,8 +1790,8 @@ function renderCytoscapeGraph() {
   cy.on('mouseover', 'node', evt => evt.target.addClass('hovered'));
   cy.on('mouseout',  'node', evt => evt.target.removeClass('hovered'));
 
-  // Animate roadmap path after graph renders
-  setTimeout(animateRoadmapPath, 300);
+  // Animate roadmap path once the fcose layout finishes
+  cy.one('layoutstop', () => setTimeout(animateRoadmapPath, 150));
 
   // Fade out hint
   const hint = document.getElementById('graph-hint');
@@ -1819,7 +1824,8 @@ function buildCytoscapeStyle() {
         'background-color':  '#64748b',
         'border-width':      2.5,
         'border-color':      'transparent',
-        'transition-property':  'background-color, border-color, border-width',
+        'cursor':               'pointer',
+        'transition-property':  'background-color, border-color, border-width, width, height, shadow-blur, shadow-opacity',
         'transition-duration':  '0.22s',
       },
     },
@@ -1831,7 +1837,17 @@ function buildCytoscapeStyle() {
     // Roadmap path nodes — purple (overrides missing/next, not known)
     {
       selector: 'node[?isPath][status != "known"]',
-      style: { 'background-color': '#7c3aed', 'color': '#fff', 'border-color': '#a78bfa', 'border-width': 3 },
+      style: {
+        'background-color': '#7c3aed',
+        'color':            '#fff',
+        'border-color':     '#a78bfa',
+        'border-width':     3,
+        'shadow-blur':      16,
+        'shadow-color':     '#7c3aed',
+        'shadow-opacity':   0.55,
+        'shadow-offset-x':  0,
+        'shadow-offset-y':  0,
+      },
     },
     // Domain accent border rings
     { selector: 'node[domain = "programming"]', style: { 'border-color': '#3b82f6' } },
@@ -1841,7 +1857,20 @@ function buildCytoscapeStyle() {
     { selector: 'node[domain = "web"]',         style: { 'border-color': '#f59e0b' } },
     { selector: 'node[domain = "data"]',        style: { 'border-color': '#6366f1' } },
     // Interaction classes
-    { selector: 'node.hovered',  style: { 'border-width': 4, 'border-opacity': 1, 'overlay-color': '#fff', 'overlay-opacity': 0.08 } },
+    {
+      selector: 'node.hovered',
+      style: {
+        'border-width':     5,
+        'border-opacity':   1,
+        'overlay-color':    '#fff',
+        'overlay-opacity':  0.10,
+        'shadow-blur':      20,
+        'shadow-color':     '#ffffff',
+        'shadow-opacity':   0.40,
+        'shadow-offset-x':  0,
+        'shadow-offset-y':  0,
+      },
+    },
     { selector: 'node.selected', style: { 'border-width': 4, 'border-color': '#ffffff', 'border-opacity': 1, 'overlay-color': '#fff', 'overlay-opacity': 0.15 } },
     { selector: 'node.dimmed',   style: { 'opacity': 0.15 } },
     // Base edge
@@ -1857,10 +1886,21 @@ function buildCytoscapeStyle() {
         'arrow-scale':        0.75,
       },
     },
-    // Roadmap path edges — purple + thicker
+    // Roadmap path edges — purple + thicker + glow
     {
       selector: 'edge[?isPath]',
-      style: { 'width': 3.5, 'line-color': '#7c3aed', 'target-arrow-color': '#7c3aed', 'opacity': 1, 'arrow-scale': 1.1 },
+      style: {
+        'width':                3.5,
+        'line-color':           '#7c3aed',
+        'target-arrow-color':   '#7c3aed',
+        'opacity':              1,
+        'arrow-scale':          1.1,
+        'shadow-blur':          8,
+        'shadow-color':         '#7c3aed',
+        'shadow-opacity':       0.45,
+        'shadow-offset-x':      0,
+        'shadow-offset-y':      0,
+      },
     },
     // Neighbour highlight
     { selector: 'edge.highlighted', style: { 'width': 2.5, 'line-color': '#64748b', 'target-arrow-color': '#64748b', 'opacity': 1 } },
@@ -1869,23 +1909,35 @@ function buildCytoscapeStyle() {
 }
 
 // ── Roadmap path animation ──────────────────────────────────────
+// Sequentially pulses each path node (staggered 90 ms apart) then
+// flashes the path edges — gives a "travelling highlight" feel.
 function animateRoadmapPath() {
   if (!cy) return;
   const pathEdges = cy.edges('[?isPath]');
-  const pathNodes = cy.nodes('[?isPath][status != "known"]');
-  if (pathEdges.length === 0) return;
+  const pathNodes = cy.nodes('[?isPath][status != "known"]').toArray();
+  if (pathEdges.length === 0 && pathNodes.length === 0) return;
 
-  // Pulse path nodes: expand then shrink
-  pathNodes.forEach(n => {
+  // Staggered node pulse
+  pathNodes.forEach((n, i) => {
     const s = n.data('size');
-    n.animate({ style: { 'border-width': 5, 'width': s + 10, 'height': s + 10 } }, { duration: 360, easing: 'ease-in-out-cubic' })
-     .animate({ style: { 'border-width': 3, 'width': s,      'height': s      } }, { duration: 360, easing: 'ease-in-out-cubic' });
+    setTimeout(() => {
+      n.animate(
+        { style: { 'border-width': 6, 'width': s + 12, 'height': s + 12, 'shadow-opacity': 0.85 } },
+        { duration: 280, easing: 'ease-in-out-cubic' }
+      ).animate(
+        { style: { 'border-width': 3, 'width': s,      'height': s,      'shadow-opacity': 0.55 } },
+        { duration: 280, easing: 'ease-in-out-cubic' }
+      );
+    }, i * 90);
   });
 
-  // Flash path edges
-  pathEdges
-    .animate({ style: { 'width': 6, 'opacity': 1 } }, { duration: 360 })
-    .animate({ style: { 'width': 3.5, 'opacity': 1 } }, { duration: 360 });
+  // Flash path edges after nodes finish
+  const edgeDelay = pathNodes.length * 90 + 60;
+  setTimeout(() => {
+    pathEdges
+      .animate({ style: { 'width': 6, 'opacity': 1, 'shadow-opacity': 0.75 } }, { duration: 320 })
+      .animate({ style: { 'width': 3.5, 'opacity': 1, 'shadow-opacity': 0.45 } }, { duration: 320 });
+  }, edgeDelay);
 }
 
 // ── Tooltip (reuses existing #graph-tooltip panel) ─────────────
