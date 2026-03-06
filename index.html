@@ -11,12 +11,8 @@
 
   <!-- D3 v7 — kept for compatibility -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
-  <!-- Cytoscape.js — interactive skill graph -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
-  <!-- Cytoscape fcose — dynamic force-directed layout (deps must load in order) -->
-  <script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
+  <!-- vis-network — physics-based interactive skill graph -->
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 
   <style>
     /* ── Reset ────────────────────────────────────────────────── */
@@ -1674,25 +1670,32 @@ function renderRoadmapPage() {
 }
 
 // ════════════════════════════════════════════════════════════
-// CYTOSCAPE.JS INTERACTIVE SKILL MAP
+// VIS-NETWORK INTERACTIVE SKILL MAP
 // ════════════════════════════════════════════════════════════
 //
-// Entry point: renderCytoscapeGraph()  — replaces the old D3 graph.
+// Entry point: renderCytoscapeGraph() — vis-network under the hood.
 //
 // Features:
+//   - Barnes-Hut physics: live, draggable nodes that spring into place
 //   - Node color by status (known=green / next=blue / locked=grey / neutral)
 //   - Node size by importance (core / domain / tool)
 //   - Domain accent border ring (Programming=blue, Math=violet, etc.)
-//   - Roadmap path nodes/edges highlighted in purple with animation
-//   - Click to select + neighborhood highlight + detail tooltip
+//   - Roadmap path nodes/edges highlighted in purple with glow
+//   - Click to select + neighbourhood highlight + detail tooltip
+//   - Hover softly dims unrelated nodes for easy exploration
 //   - Filter controls: Full / Roadmap Path / Missing Skills
 //   - Smooth pan + zoom; Fit View button
-//   - Fade-in animation after layout settles
 // ════════════════════════════════════════════════════════════
 
-let cy = null; // Global Cytoscape instance
+let visNetwork  = null;   // vis.Network instance
+let visNodes    = null;   // vis.DataSet (nodes)
+let visEdges    = null;   // vis.DataSet (edges)
+let nodeDataMap = {};     // id → { status, domain, isPath, label, size }
+let edgeDataMap = {};     // id → { source, target, isPath }
+let visFilter   = 'full'; // 'full' | 'roadmap' | 'missing'
+let visSelected = null;   // nodeId of clicked node (null = none)
 
-// Node importance → pixel size
+// Node importance → full pixel diameter
 const CORE_SKILL_SIZE = new Set([
   'Python', 'Linear Algebra', 'Statistics', 'Machine Learning',
   'JavaScript', 'Git', 'Databases', 'Data Science', 'Deep Learning',
@@ -1714,12 +1717,12 @@ function nodeSize(label) {
 function renderCytoscapeGraph() {
   const container = document.getElementById('graph-canvas');
   container.innerHTML = '';
-  if (cy) { cy.destroy(); cy = null; }
+  if (visNetwork) { visNetwork.destroy(); visNetwork = null; }
 
   const { nodes: rawNodes, edges: rawEdges } = state.graphData;
   if (!rawNodes || rawNodes.length === 0) return;
 
-  // Build path skill set and path edge IDs from learning_paths
+  // Build path sets from learning_paths
   const roadmapPaths = state.roadmapResult?.learning_paths || {};
   const pathSkillSet = new Set();
   const pathEdgeSet  = new Set();
@@ -1730,72 +1733,86 @@ function renderCytoscapeGraph() {
     });
   });
 
-  // Build Cytoscape elements
-  const elements = [];
-  rawNodes.forEach(n => {
-    elements.push({
-      group: 'nodes',
-      data: {
-        id:     n.id,
-        label:  n.label || n.id,
-        status: n.status  || 'neutral',
-        domain: n.domain  || 'programming',
-        size:   nodeSize(n.label || n.id),
-        isPath: pathSkillSet.has(n.id),
-      },
-    });
+  // Populate metadata maps
+  nodeDataMap = {};
+  edgeDataMap = {};
+  const nodesArray = rawNodes.map(n => {
+    const label  = n.label || n.id;
+    const status = n.status || 'neutral';
+    const domain = n.domain || 'programming';
+    const isPath = pathSkillSet.has(n.id);
+    const size   = nodeSize(label);
+    nodeDataMap[n.id] = { status, domain, isPath, label, size };
+    return buildVisNodeData(n.id, 0);
   });
-  rawEdges.forEach(e => {
+
+  const edgesArray = rawEdges.map(e => {
     const src = typeof e.source === 'object' ? e.source.id : e.source;
     const tgt = typeof e.target === 'object' ? e.target.id : e.target;
     const eid = `${src}||${tgt}`;
-    elements.push({
-      group: 'edges',
-      data: { id: eid, source: src, target: tgt, isPath: pathEdgeSet.has(eid) },
-    });
+    edgeDataMap[eid] = { source: src, target: tgt, isPath: pathEdgeSet.has(eid) };
+    return buildVisEdgeData(eid, 0);
   });
 
-  cy = cytoscape({
-    container,
-    elements,
-    style: buildCytoscapeStyle(),
-    layout: {
-      name:              'fcose',
-      animate:           true,
-      randomize:         true,
-      fit:               true,
-      padding:           30,
-      nodeRepulsion:     8000,
-      idealEdgeLength:   120,
-      edgeElasticity:    0.45,
-      gravity:           0.25,
-      animationDuration: 800,
-      animationEasing:   'ease-out-cubic',
+  visNodes    = new vis.DataSet(nodesArray);
+  visEdges    = new vis.DataSet(edgesArray);
+  visFilter   = 'full';
+  visSelected = null;
+
+  visNetwork = new vis.Network(container, { nodes: visNodes, edges: visEdges }, {
+    physics: {
+      enabled: true,
+      stabilization: false,
+      barnesHut: {
+        gravitationalConstant: -8000,
+        centralGravity:        0.3,
+        springLength:          120,
+        springConstant:        0.04,
+        damping:               0.09,
+        avoidOverlap:          0.3,
+      },
     },
-    minZoom: 0.1,
-    maxZoom: 4,
-    userZoomingEnabled:  true,
-    userPanningEnabled:  true,
-    boxSelectionEnabled: false,
+    interaction: {
+      hover:               true,
+      zoomView:            true,
+      dragView:            true,
+      dragNodes:           true,
+      navigationButtons:   false,
+      keyboard:            false,
+      hoverConnectedEdges: false,  // managed manually
+      tooltipDelay:        9999,   // disable built-in tooltip
+    },
+    nodes: { shape: 'dot', chosen: false },
+    edges: { smooth: { type: 'continuous', roundness: 0.2 }, chosen: false },
+    layout: { randomSeed: 42, improvedLayout: false },
   });
 
-  // Node click → select + highlight neighbourhood
-  cy.on('tap', 'node', function(evt) {
-    evt.stopPropagation();
-    showTooltip(evt.target);
+  // ── Events ──────────────────────────────────────────────────
+  visNetwork.on('click', params => {
+    if (params.nodes.length > 0) {
+      visSelected = params.nodes[0];
+      showVisTooltip(visSelected);
+      applyVisState();
+    } else if (visSelected) {
+      visSelected = null;
+      hideTooltip();
+    }
   });
-  // Background click → clear
-  cy.on('tap', function(evt) {
-    if (evt.target === cy) hideTooltip();
+
+  visNetwork.on('hoverNode', params => {
+    if (visSelected) return;
+    applyVisState(params.node);
   });
-  // Hover glow
-  cy.on('mouseover', 'node', evt => evt.target.addClass('hovered'));
-  cy.on('mouseout',  'node', evt => evt.target.removeClass('hovered'));
 
-  // Animate roadmap path once the fcose layout finishes
-  cy.one('layoutstop', () => setTimeout(animateRoadmapPath, 150));
+  visNetwork.on('blurNode', () => {
+    if (visSelected) return;
+    applyVisState();
+  });
 
-  // Fade out hint
+  // Animate roadmap path 1.5 s after render (gives physics time to settle)
+  setTimeout(animateRoadmapPath, 1500);
+
+  // Fade hint after 4 s
   const hint = document.getElementById('graph-hint');
   if (hint) setTimeout(() => hint.classList.add('fade'), 4000);
 
@@ -1805,237 +1822,266 @@ function renderCytoscapeGraph() {
   });
 }
 
-// ── Cytoscape stylesheet ────────────────────────────────────────
-function buildCytoscapeStyle() {
-  return [
-    // Base node
-    {
-      selector: 'node',
-      style: {
-        'width':             'data(size)',
-        'height':            'data(size)',
-        'label':             'data(label)',
-        'text-valign':       'center',
-        'text-halign':       'center',
-        'font-family':       'JetBrains Mono, monospace',
-        'font-size':         '9px',
-        'font-weight':       '700',
-        'color':             '#fff',
-        'text-wrap':         'wrap',
-        'text-max-width':    '58px',
-        'background-color':  '#64748b',
-        'border-width':      2.5,
-        'border-color':      'transparent',
-        'cursor':               'pointer',
-        'transition-property':  'background-color, border-color, border-width, width, height, shadow-blur, shadow-opacity',
-        'transition-duration':  '0.22s',
+// ── vis node style object ─────────────────────────────────────
+// dimLevel: 0 = normal  1 = hover-dim (slight)  2 = heavy dim
+function buildVisNodeData(id, dimLevel) {
+  const m = nodeDataMap[id];
+  if (!m) return { id };
+
+  const STATUS_BG  = { known: '#16a34a', next: '#2563eb', missing: '#4b5563', neutral: '#374151' };
+  const domColor   = DOMAIN_COLOR[m.domain] || '#a1a1aa';
+  const isPathNode = m.isPath && m.status !== 'known';
+  const bg         = isPathNode ? '#7c3aed' : (STATUS_BG[m.status] || '#374151');
+  const border     = isPathNode ? '#a78bfa' : domColor;
+  const fontColor  = m.status === 'neutral' ? '#9ca3af' : '#fff';
+  const radius     = Math.round(m.size / 2);
+
+  if (dimLevel === 2) {
+    return {
+      id, size: radius,
+      color: {
+        background: '#1e293b', border: '#334155',
+        highlight: { background: '#1e293b', border: '#475569' },
+        hover:     { background: '#1e293b', border: '#475569' },
       },
-    },
-    // Status fills
-    { selector: 'node[status = "known"]',   style: { 'background-color': '#16a34a', 'color': '#fff' } },
-    { selector: 'node[status = "next"]',    style: { 'background-color': '#2563eb', 'color': '#fff' } },
-    { selector: 'node[status = "missing"]', style: { 'background-color': '#4b5563', 'color': '#e5e7eb' } },
-    { selector: 'node[status = "neutral"]', style: { 'background-color': '#374151', 'color': '#9ca3af' } },
-    // Roadmap path nodes — purple (overrides missing/next, not known)
-    {
-      selector: 'node[?isPath][status != "known"]',
-      style: {
-        'background-color': '#7c3aed',
-        'color':            '#fff',
-        'border-color':     '#a78bfa',
-        'border-width':     3,
-        'shadow-blur':      16,
-        'shadow-color':     '#7c3aed',
-        'shadow-opacity':   0.55,
-        'shadow-offset-x':  0,
-        'shadow-offset-y':  0,
+      font:        { color: '#334155', size: 10, face: 'JetBrains Mono, monospace' },
+      borderWidth: 1,
+      shadow:      { enabled: false },
+      opacity:     1,
+    };
+  }
+
+  if (dimLevel === 1) {
+    return {
+      id, size: radius,
+      color: {
+        background: bg, border: border,
+        highlight: { background: bg, border: '#fff' },
+        hover:     { background: bg, border: '#fff' },
       },
+      font:        { color: fontColor, size: 10, face: 'JetBrains Mono, monospace' },
+      borderWidth: isPathNode ? 2 : 1.5,
+      shadow:      { enabled: false },
+      opacity:     0.35,
+    };
+  }
+
+  // Normal
+  return {
+    id, size: radius,
+    color: {
+      background: bg, border: border,
+      highlight: { background: bg, border: '#fff' },
+      hover:     { background: bg, border: '#fff' },
     },
-    // Domain accent border rings
-    { selector: 'node[domain = "programming"]', style: { 'border-color': '#3b82f6' } },
-    { selector: 'node[domain = "math"]',        style: { 'border-color': '#7c3aed' } },
-    { selector: 'node[domain = "ml"]',          style: { 'border-color': '#db2777' } },
-    { selector: 'node[domain = "engineering"]', style: { 'border-color': '#0d9488' } },
-    { selector: 'node[domain = "web"]',         style: { 'border-color': '#f59e0b' } },
-    { selector: 'node[domain = "data"]',        style: { 'border-color': '#6366f1' } },
-    // Interaction classes
-    {
-      selector: 'node.hovered',
-      style: {
-        'border-width':     5,
-        'border-opacity':   1,
-        'overlay-color':    '#fff',
-        'overlay-opacity':  0.10,
-        'shadow-blur':      20,
-        'shadow-color':     '#ffffff',
-        'shadow-opacity':   0.40,
-        'shadow-offset-x':  0,
-        'shadow-offset-y':  0,
-      },
-    },
-    { selector: 'node.selected', style: { 'border-width': 4, 'border-color': '#ffffff', 'border-opacity': 1, 'overlay-color': '#fff', 'overlay-opacity': 0.15 } },
-    { selector: 'node.dimmed',   style: { 'opacity': 0.15 } },
-    // Base edge
-    {
-      selector: 'edge',
-      style: {
-        'width':              1.4,
-        'line-color':         '#d1d5db',
-        'target-arrow-color': '#d1d5db',
-        'target-arrow-shape': 'triangle',
-        'curve-style':        'bezier',
-        'opacity':            0.65,
-        'arrow-scale':        0.75,
-      },
-    },
-    // Roadmap path edges — purple + thicker + glow
-    {
-      selector: 'edge[?isPath]',
-      style: {
-        'width':                3.5,
-        'line-color':           '#7c3aed',
-        'target-arrow-color':   '#7c3aed',
-        'opacity':              1,
-        'arrow-scale':          1.1,
-        'shadow-blur':          8,
-        'shadow-color':         '#7c3aed',
-        'shadow-opacity':       0.45,
-        'shadow-offset-x':      0,
-        'shadow-offset-y':      0,
-      },
-    },
-    // Neighbour highlight
-    { selector: 'edge.highlighted', style: { 'width': 2.5, 'line-color': '#64748b', 'target-arrow-color': '#64748b', 'opacity': 1 } },
-    { selector: 'edge.dimmed',      style: { 'opacity': 0.07 } },
-  ];
+    font:        { color: fontColor, size: 10, face: 'JetBrains Mono, monospace' },
+    borderWidth: isPathNode ? 3 : 2.5,
+    shadow:      isPathNode
+      ? { enabled: true, color: '#7c3aed', size: 10, x: 0, y: 0 }
+      : { enabled: false },
+    opacity: 1,
+  };
 }
 
-// ── Roadmap path animation ──────────────────────────────────────
-// Sequentially pulses each path node (staggered 90 ms apart) then
-// flashes the path edges — gives a "travelling highlight" feel.
-function animateRoadmapPath() {
-  if (!cy) return;
-  const pathEdges = cy.edges('[?isPath]');
-  const pathNodes = cy.nodes('[?isPath][status != "known"]').toArray();
-  if (pathEdges.length === 0 && pathNodes.length === 0) return;
+// ── vis edge style object ─────────────────────────────────────
+function buildVisEdgeData(id, dimLevel) {
+  const e = edgeDataMap[id];
+  if (!e) return { id };
 
-  // Staggered node pulse
-  pathNodes.forEach((n, i) => {
-    const s = n.data('size');
+  const isPath = e.isPath;
+  if (dimLevel === 2) {
+    return {
+      id,
+      color:  { color: '#1e293b', highlight: '#334155', hover: '#334155', opacity: 0.3 },
+      width:  0.5,
+      shadow: { enabled: false },
+      arrows: { to: { enabled: true, scaleFactor: 0.5, type: 'arrow' } },
+      smooth: { type: 'continuous', roundness: 0.2 },
+    };
+  }
+
+  return {
+    id,
+    color: {
+      color:     isPath ? '#7c3aed' : '#d1d5db',
+      highlight: isPath ? '#a78bfa' : '#94a3b8',
+      hover:     isPath ? '#a78bfa' : '#94a3b8',
+      opacity:   isPath ? 1.0       : 0.65,
+    },
+    width:  isPath ? 3.5 : 1.4,
+    shadow: isPath
+      ? { enabled: true, color: '#7c3aed', size: 6, x: 0, y: 0 }
+      : { enabled: false },
+    arrows: { to: { enabled: true, scaleFactor: 0.5, type: 'arrow' } },
+    smooth: { type: 'continuous', roundness: 0.2 },
+  };
+}
+
+// ── Apply current filter + interaction state to all elements ──
+// hoveredId: currently hovered node id (or null)
+function applyVisState(hoveredId = null) {
+  if (!visNetwork || !visNodes || !visEdges) return;
+
+  const focusId   = visSelected || hoveredId;
+  const connNodes = focusId
+    ? new Set([focusId, ...visNetwork.getConnectedNodes(focusId)])
+    : null;
+  const connEdges = focusId
+    ? new Set(visNetwork.getConnectedEdges(focusId))
+    : null;
+  const heavyDim  = !!visSelected; // click → heavy dim; hover → light dim
+
+  const nodeUpdates = Object.keys(nodeDataMap).map(id => {
+    const m = nodeDataMap[id];
+    let filterDim = false;
+    if (visFilter === 'roadmap') filterDim = !m.isPath && m.status !== 'known';
+    if (visFilter === 'missing') filterDim = m.status !== 'missing' && m.status !== 'next';
+
+    const interactionDim = connNodes ? !connNodes.has(id) : false;
+    let dimLevel = 0;
+    if      (interactionDim && heavyDim) dimLevel = 2;
+    else if (interactionDim)             dimLevel = 1;
+    else if (filterDim)                  dimLevel = 2;
+
+    return buildVisNodeData(id, dimLevel);
+  });
+
+  const edgeUpdates = Object.keys(edgeDataMap).map(id => {
+    const e = edgeDataMap[id];
+    let filterDim = false;
+    if (visFilter === 'roadmap') filterDim = !e.isPath;
+    if (visFilter === 'missing') {
+      filterDim = !['missing', 'next'].includes(nodeDataMap[e.source]?.status)
+               && !['missing', 'next'].includes(nodeDataMap[e.target]?.status);
+    }
+    const interactionDim = connEdges ? !connEdges.has(id) : false;
+    const dimLevel = (filterDim || interactionDim) ? 2 : 0;
+    return buildVisEdgeData(id, dimLevel);
+  });
+
+  visNodes.update(nodeUpdates);
+  visEdges.update(edgeUpdates);
+}
+
+// ── Roadmap path animation ─────────────────────────────────────
+// Staggered pulse across path nodes (90 ms apart), then edge flash.
+function animateRoadmapPath() {
+  if (!visNetwork) return;
+  const pathNodeIds = Object.entries(nodeDataMap)
+    .filter(([_, m]) => m.isPath && m.status !== 'known')
+    .map(([id]) => id);
+  const pathEdgeIds = Object.entries(edgeDataMap)
+    .filter(([_, m]) => m.isPath)
+    .map(([id]) => id);
+  if (pathNodeIds.length === 0 && pathEdgeIds.length === 0) return;
+
+  // Staggered node pulse: expand → shrink
+  pathNodeIds.forEach((nodeId, i) => {
+    const origRadius = Math.round(nodeDataMap[nodeId].size / 2);
     setTimeout(() => {
-      n.animate(
-        { style: { 'border-width': 6, 'width': s + 12, 'height': s + 12, 'shadow-opacity': 0.85 } },
-        { duration: 280, easing: 'ease-in-out-cubic' }
-      ).animate(
-        { style: { 'border-width': 3, 'width': s,      'height': s,      'shadow-opacity': 0.55 } },
-        { duration: 280, easing: 'ease-in-out-cubic' }
-      );
+      visNodes.update([{ id: nodeId, size: origRadius + 6, borderWidth: 6 }]);
+      setTimeout(() => visNodes.update([{ id: nodeId, size: origRadius, borderWidth: 3 }]), 280);
     }, i * 90);
   });
 
   // Flash path edges after nodes finish
-  const edgeDelay = pathNodes.length * 90 + 60;
+  const edgeDelay = pathNodeIds.length * 90 + 60;
   setTimeout(() => {
-    pathEdges
-      .animate({ style: { 'width': 6, 'opacity': 1, 'shadow-opacity': 0.75 } }, { duration: 320 })
-      .animate({ style: { 'width': 3.5, 'opacity': 1, 'shadow-opacity': 0.45 } }, { duration: 320 });
+    visEdges.update(pathEdgeIds.map(id => ({ id, width: 6 })));
+    setTimeout(() => visEdges.update(pathEdgeIds.map(id => ({ id, width: 3.5 }))), 320);
   }, edgeDelay);
 }
 
-// ── Tooltip (reuses existing #graph-tooltip panel) ─────────────
-function showTooltip(node) {
-  if (!cy) return;
-  cy.elements().removeClass('selected dimmed highlighted');
-  node.addClass('selected');
-  const nbhd = node.closedNeighborhood();
-  cy.elements().not(nbhd).addClass('dimmed');
-  node.connectedEdges().addClass('highlighted');
+// ── Tooltip ────────────────────────────────────────────────────
+const DOMAIN_LABEL_VIS = {
+  programming: 'Programming', math: 'Mathematics',
+  ml: 'ML / AI', engineering: 'Engineering', web: 'Web', data: 'Data Engineering',
+};
+const STATUS_LABEL_VIS = {
+  known: '✓ You have this', next: '→ Learn next', missing: '✗ Skill gap', neutral: 'Not required',
+};
+const STATUS_STYLE_VIS = {
+  known:   { bg: '#dcfce7', color: '#15803d' },
+  next:    { bg: '#dbeafe', color: '#1e40af' },
+  missing: { bg: '#f4f4f5', color: '#52525b' },
+  neutral: { bg: '#f4f4f5', color: '#71717a' },
+};
 
-  const d = node.data();
-  const DOMAIN_LABEL = {
-    programming: 'Programming', math: 'Mathematics',
-    ml: 'ML / AI', engineering: 'Engineering', web: 'Web', data: 'Data Engineering',
-  };
-  const STATUS_LABEL = { known: '✓ You have this', next: '→ Learn next', missing: '✗ Skill gap', neutral: 'Not required' };
-  const STATUS_STYLE = {
-    known:   { bg: '#dcfce7', color: '#15803d' },
-    next:    { bg: '#dbeafe', color: '#1e40af' },
-    missing: { bg: '#f4f4f5', color: '#52525b' },
-    neutral: { bg: '#f4f4f5', color: '#71717a' },
-  };
-  const domColor = DOMAIN_COLOR[d.domain] || '#a1a1aa';
-  const st = STATUS_STYLE[d.status] || STATUS_STYLE.neutral;
+function showVisTooltip(nodeId) {
+  if (!visNetwork) return;
+  const m = nodeDataMap[nodeId];
+  if (!m) return;
+
+  const domColor = DOMAIN_COLOR[m.domain] || '#a1a1aa';
+  const st       = STATUS_STYLE_VIS[m.status] || STATUS_STYLE_VIS.neutral;
 
   const badge = document.getElementById('tt-domain-badge');
-  badge.textContent      = DOMAIN_LABEL[d.domain] || d.domain || '';
+  badge.textContent      = DOMAIN_LABEL_VIS[m.domain] || m.domain || '';
   badge.style.background = domColor + '22';
   badge.style.color      = domColor;
   badge.style.border     = `1px solid ${domColor}44`;
 
-  document.getElementById('tt-name').textContent = d.label;
+  document.getElementById('tt-name').textContent = m.label;
   const statusEl = document.getElementById('tt-status');
-  statusEl.textContent      = STATUS_LABEL[d.status] || d.status;
+  statusEl.textContent      = STATUS_LABEL_VIS[m.status] || m.status;
   statusEl.style.background = st.bg;
   statusEl.style.color      = st.color;
   document.getElementById('tt-desc').textContent =
-    SKILL_WHY[d.label] || 'A key skill on the path to your target role.';
+    SKILL_WHY[m.label] || 'A key skill on the path to your target role.';
 
-  function setSection(sectionId, listId, items) {
-    const arr  = Array.isArray(items) ? items : items.toArray();
-    const sec  = document.getElementById(sectionId);
+  // Prerequisites: edges whose target is this node
+  const prereqs = Object.values(edgeDataMap)
+    .filter(e => e.target === nodeId)
+    .map(e => nodeDataMap[e.source]?.label)
+    .filter(Boolean);
+  // Leads to: edges whose source is this node
+  const leadsTo = Object.values(edgeDataMap)
+    .filter(e => e.source === nodeId)
+    .map(e => nodeDataMap[e.target]?.label)
+    .filter(Boolean);
+
+  function setSection(secId, listId, items) {
+    const sec  = document.getElementById(secId);
     const list = document.getElementById(listId);
     if (!sec || !list) return;
-    if (arr.length === 0) { sec.classList.add('hidden'); return; }
+    if (!items.length) { sec.classList.add('hidden'); return; }
     sec.classList.remove('hidden');
-    list.innerHTML = arr.map(s => `<span class="tt-tag">${s}</span>`).join('');
+    list.innerHTML = items.map(s => `<span class="tt-tag">${s}</span>`).join('');
   }
 
-  setSection('tt-prereqs',  'tt-prereqs-list', node.incomers('node').map(n2 => n2.data('label')));
-  setSection('tt-leads-to', 'tt-leads-list',   node.outgoers('node').map(n2 => n2.data('label')));
+  setSection('tt-prereqs',  'tt-prereqs-list', prereqs);
+  setSection('tt-leads-to', 'tt-leads-list',   leadsTo);
   document.getElementById('graph-tooltip').classList.remove('hidden');
 }
 
 function hideTooltip() {
   document.getElementById('graph-tooltip').classList.add('hidden');
-  if (cy) cy.elements().removeClass('selected dimmed highlighted');
+  visSelected = null;
+  if (visNodes) applyVisState();
 }
 
-// ── Filter controls ─────────────────────────────────────────────
+// ── Filter controls ────────────────────────────────────────────
 function setGraphFilter(filter) {
-  if (!cy) return;
-  cy.elements().removeClass('dimmed');
-
-  if (filter === 'roadmap') {
-    cy.nodes().forEach(n => { if (!n.data('isPath') && n.data('status') !== 'known') n.addClass('dimmed'); });
-    cy.edges().forEach(e => { if (!e.data('isPath')) e.addClass('dimmed'); });
-  } else if (filter === 'missing') {
-    cy.nodes().forEach(n => {
-      const s = n.data('status');
-      if (s !== 'missing' && s !== 'next') n.addClass('dimmed');
-    });
-    cy.edges().forEach(e => {
-      const ss = e.source().data('status'), ts = e.target().data('status');
-      if (!['missing', 'next'].includes(ss) && !['missing', 'next'].includes(ts)) e.addClass('dimmed');
-    });
-  }
-
+  if (!visNetwork) return;
+  visFilter = filter;
+  applyVisState();
   document.querySelectorAll('.graph-filter-btn[data-filter]').forEach(b => {
     b.classList.toggle('active', b.dataset.filter === filter);
   });
 }
 
-// ── Zoom controls (called from HTML buttons) ────────────────────
+// ── Zoom controls ──────────────────────────────────────────────
 function graphZoomIn() {
-  if (!cy) return;
-  cy.zoom({ level: cy.zoom() * 1.4, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+  if (!visNetwork) return;
+  visNetwork.moveTo({ scale: visNetwork.getScale() * 1.4, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
 }
 function graphZoomOut() {
-  if (!cy) return;
-  cy.zoom({ level: cy.zoom() * 0.72, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+  if (!visNetwork) return;
+  visNetwork.moveTo({ scale: visNetwork.getScale() * 0.72, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
 }
 function graphReset() {
   hideTooltip();
-  if (cy) cy.animate({ fit: { eles: cy.elements(), padding: 40 } }, { duration: 350 });
+  if (visNetwork) visNetwork.fit({ animation: { duration: 350, easingFunction: 'easeInOutQuad' } });
 }
 
 
